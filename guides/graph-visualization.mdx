@@ -1,0 +1,464 @@
+---
+title: Using the graph visualization tool
+description: Explore your music listening graph with interactive visualization and analysis tools
+---
+
+The Rotations graph visualization provides an interactive way to explore your listening patterns, discover connections between songs, and analyze your music graph.
+
+## Overview
+
+The visualization tool renders your entire listening graph as an interactive network where:
+
+- **Nodes** represent songs
+- **Edges** represent transitions (song A played before song B)
+- **Node size** reflects importance (play count or PageRank)
+- **Edge thickness** shows transition frequency
+- **Colors** indicate clusters or categories
+
+## Starting the visualization
+
+<Steps>
+  <Step title="Build your graph">
+    Ensure you have a listening graph generated:
+
+    ```bash
+    cd graph-pipeline
+    npm run build-graph
+    ```
+
+    This creates `data/listening-graph.json`.
+  </Step>
+
+  <Step title="Start the visualization server">
+    Launch the graph frontend:
+
+    ```bash
+    cd graph-frontend
+    npm install
+    npm run dev
+    ```
+
+    The app opens at `http://localhost:5173`.
+  </Step>
+
+  <Step title="Load your graph data">
+    The visualization automatically loads your graph from the API endpoint.
+
+    If running in standalone mode, you can drag and drop your `listening-graph.json` file into the browser.
+  </Step>
+</Steps>
+
+## Layout algorithms
+
+The visualization offers three layout modes optimized for different analysis needs.
+
+### PageRank layout
+
+**Best for:** Finding your most important songs
+
+```typescript
+layout: 'pagerank'
+```
+
+Positions nodes based on PageRank scores computed from the graph structure. Songs with high PageRank appear more central and larger.
+
+**How it works:**
+- Runs PageRank algorithm on the directed graph
+- Uses PageRank scores for node sizing
+- Applies force-directed layout with PageRank-weighted attraction
+- Central nodes (high PageRank) attract more strongly
+
+<Accordion title="When to use PageRank layout">
+  Use this layout when you want to:
+  - Identify your most "important" songs
+  - Find songs that bridge different listening patterns
+  - Discover tracks you return to frequently
+  - Understand which songs anchor your listening habits
+</Accordion>
+
+### MDS layout
+
+**Best for:** Seeing overall graph structure
+
+```typescript
+layout: 'mds'
+```
+
+Multidimensional Scaling (MDS) layout preserves graph distances. Songs you listen to in sequence appear closer together.
+
+**How it works:**
+- Computes shortest paths between all node pairs
+- Projects high-dimensional distances into 2D space
+- Node size based on degree (connection count)
+- Preserves topological relationships
+
+<Tip>
+  MDS layout is excellent for identifying natural clusters and understanding the overall shape of your listening patterns.
+</Tip>
+
+### Weighted MDS layout
+
+**Best for:** Analyzing connection strength
+
+```typescript
+layout: 'weighted-mds'
+```
+
+Like MDS, but considers edge weights (transition frequency) when computing distances.
+
+**How it works:**
+- Converts edge weights to distances (higher weight = closer distance)
+- Computes weighted shortest paths
+- Node size reflects weighted degree (sum of edge weights)
+- Emphasizes frequently traveled paths
+
+<Info>
+  Weighted MDS makes songs with strong, frequent connections cluster tightly, while occasional connections spread apart.
+</Info>
+
+### Switching layouts
+
+Change layouts using the controls in the top-right corner:
+
+```typescript
+// Layout controls appear as buttons
+<button>PageRank</button>
+<button>MDS</button>
+<button>Weighted MDS</button>
+```
+
+The graph smoothly transitions between layouts.
+
+## Navigation controls
+
+### Camera movement
+
+- **Pan** - Click and drag the background
+- **Zoom** - Scroll wheel or pinch gesture
+- **Fit view** - Double-click the background
+- **Reset zoom** - Press `R` key
+
+### Node interaction
+
+- **Click node** - Select and highlight connections
+- **Hover node** - Show quick info tooltip
+- **Double-click node** - Zoom to node and neighbors
+- **Right-click node** - Open context menu (play, add to rotation, etc.)
+
+### Edge interaction
+
+- **Hover edge** - Show transition count between songs
+- **Click edge** - Highlight the path and show details
+
+## Search and filtering
+
+### Search bar
+
+Find songs quickly using the search bar (top-left):
+
+```typescript
+// Search by:
+- Song name: "paranoid android"
+- Artist: "radiohead"
+- Combined: "radiohead paranoid"
+```
+
+Search results appear as you type. Click a result to jump to that node.
+
+<Accordion title="Search implementation details">
+  Search uses fuzzy matching on:
+  ```typescript
+  interface SearchableNode {
+    key: string // artist::track
+    label: string // "Artist — Track"
+    artists: string[]
+    totalPlays: number
+    pageRank: number
+  }
+  ```
+
+  Results are ranked by:
+  1. Exact matches first
+  2. PageRank score (popular songs rank higher)
+  3. Total plays (frequently played songs rank higher)
+</Accordion>
+
+### Date range filtering
+
+Filter the graph to show only songs played during a specific time period:
+
+<Steps>
+  <Step title="Open date picker">
+    Click the calendar icon in the top-left corner.
+  </Step>
+
+  <Step title="Select date range">
+    Choose start and end dates. The graph updates to show only songs with plays in that range.
+  </Step>
+
+  <Step title="Clear filter">
+    Click "Clear" in the date picker to restore the full graph.
+  </Step>
+</Steps>
+
+**How date filtering works:**
+
+```typescript
+// Nodes are hidden unless they have plays in the date range
+const fromStr = dateRange.from.toISOString().slice(0, 10)
+const toStr = dateRange.to.toISOString().slice(0, 10)
+
+for (const node of graph.nodes()) {
+  const playsInRange = node.playDates.filter(
+    date => date >= fromStr && date <= toStr
+  )
+  node.hidden = playsInRange.length === 0
+}
+```
+
+<Info>
+  Date filtering dynamically rescales node sizes. The largest visible node always uses maximum size, maintaining visual hierarchy within the filtered view.
+</Info>
+
+### Theme toggle
+
+Switch between dark and light themes using the sun/moon icon (top-right).
+
+```typescript
+// Theme affects:
+- Background color
+- Node colors
+- Edge colors and opacity
+- Label colors
+- UI element colors
+```
+
+## Node details panel
+
+Clicking a node opens the detail panel (right side) showing:
+
+### Song information
+
+- **Title and artist**
+- **Album name**
+- **Album artwork** (if available)
+- **Total plays across all sources**
+- **PageRank score**
+- **Data sources** (Last.fm, Spotify, etc.)
+
+### Connections
+
+**Outgoing edges** (songs played after this one):
+```typescript
+interface OutgoingEdge {
+  targetSong: string
+  weight: number // How many times this transition occurred
+  direction: 'outgoing'
+}
+```
+
+**Incoming edges** (songs played before this one):
+```typescript
+interface IncomingEdge {
+  sourceSong: string
+  weight: number
+  direction: 'incoming'
+}
+```
+
+Connections are sorted by weight (most frequent first).
+
+### Actions
+
+The detail panel includes action buttons:
+
+- **Play on Spotify** - Opens the track in Spotify (requires Spotify ID)
+- **Add to rotation** - Add this song to your active rotation
+- **Explore neighbors** - Focus view on this node and its connections
+- **Find paths** - Find shortest paths to other songs
+
+<Tip>
+  Click a neighbor in the connections list to navigate directly to that song without closing the panel.
+</Tip>
+
+## Visual encoding reference
+
+### Node attributes
+
+```typescript
+interface VisualNode {
+  size: number // 4 + (16 * log(metric) / log(maxMetric))
+  color: string // White (selected) | Gray (neighbor) | Dark (other)
+  label: string // "Artist — Track" (shown when size > threshold)
+  hidden: boolean // Filtered out by date range
+}
+```
+
+### Edge attributes
+
+```typescript
+interface VisualEdge {
+  color: string // Alpha based on weight: min(0.6, 0.15 + weight * 0.05)
+  size: number // Line thickness based on weight
+  hidden: boolean // True if either endpoint is hidden
+}
+```
+
+### Size scaling
+
+Node size uses logarithmic scaling to prevent extreme outliers from dominating:
+
+```typescript
+const size = 4 + 16 * Math.log1p(metric) / Math.log1p(maxMetric)
+// Range: [4, 20] pixels
+```
+
+This ensures:
+- Minimum size (4px) for all visible nodes
+- Maximum size (20px) for the highest-metric node
+- Smooth distribution across the range
+
+## Performance tips
+
+### Large graphs (10,000+ nodes)
+
+- Use date range filtering to reduce visible nodes
+- Switch to PageRank layout (faster rendering)
+- Disable labels for better performance
+- Increase label size threshold
+
+### Smooth navigation
+
+```typescript
+// Adjust camera animation settings
+sigma.getCamera().animate(
+  { x, y, ratio },
+  { duration: 300, easing: 'quadraticInOut' }
+)
+```
+
+### Memory management
+
+The visualization automatically:
+- Only renders visible nodes and edges
+- Culls off-screen elements
+- Reuses WebGL buffers
+- Throttles expensive computations
+
+## Keyboard shortcuts
+
+| Key | Action |
+|-----|--------|
+| `R` | Reset zoom to fit all nodes |
+| `F` | Toggle full screen |
+| `/` | Focus search bar |
+| `Escape` | Deselect node / close panel |
+| `Space` | Pause/resume layout animation |
+| `1-3` | Switch layout (1=PageRank, 2=MDS, 3=Weighted MDS) |
+| `D` | Toggle dark/light theme |
+
+## Advanced features
+
+### Path finding
+
+Find the shortest path between two songs:
+
+<Steps>
+  <Step title="Select source node">
+    Click the first song to open its detail panel.
+  </Step>
+
+  <Step title="Activate path mode">
+    Click "Find paths" button in the detail panel.
+  </Step>
+
+  <Step title="Select destination">
+    Click a second node. The shortest path highlights in the graph.
+  </Step>
+</Steps>
+
+The path display shows:
+- All nodes along the path (highlighted in green)
+- Edge weights (transition counts)
+- Total path weight (sum of all edges)
+
+<Accordion title="Path finding algorithm">
+  Uses Dijkstra's algorithm with inverted weights:
+
+  ```typescript
+  // Convert edge weights to costs (higher weight = lower cost)
+  const cost = 1 / (weight + 1)
+
+  // Find shortest path
+  const path = dijkstra(graph, sourceKey, targetKey, {
+    getEdgeWeight: (edge) => 1 / (edge.weight + 1)
+  })
+  ```
+</Accordion>
+
+### Cluster visualization
+
+If you've run cluster analysis, clusters appear as colored regions:
+
+```bash
+# Detect clusters first
+cd graph-pipeline
+npm run analyze-clusters
+```
+
+Clusters use distinct colors and can be:
+- Toggled on/off individually
+- Focused (hide other clusters)
+- Exported as rotations
+
+### Export options
+
+Export the current view:
+
+- **PNG** - Render current view as high-res image
+- **SVG** - Vector format for further editing
+- **Graph data** - Export filtered graph as JSON
+
+```typescript
+// Export menu (right-click background)
+exportView({
+  format: 'png',
+  width: 4096,
+  height: 4096,
+  includeLabels: true
+})
+```
+
+## Troubleshooting
+
+<Accordion title="Graph doesn't load">
+  1. Verify `data/listening-graph.json` exists
+  2. Check that the API server is running (`cd graph-pipeline && npm run serve`)
+  3. Clear browser cache and reload
+  4. Check browser console for errors
+</Accordion>
+
+<Accordion title="Visualization is slow">
+  1. Reduce visible nodes with date filtering
+  2. Switch to PageRank layout
+  3. Increase label threshold: `labelRenderedSizeThreshold: 12`
+  4. Use a smaller graph subset for exploration
+</Accordion>
+
+<Accordion title="Nodes appear clustered in corner">
+  This can happen if layout hasn't converged:
+  1. Press `R` to reset zoom
+  2. Switch layout mode to trigger re-computation
+  3. Reload the page to reinitialize positions
+</Accordion>
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Managing rotations" icon="list" href="/guides/managing-rotations">
+    Create rotations from graph clusters
+  </Card>
+  <Card title="Last.fm integration" icon="lastfm" href="/guides/lastfm-integration">
+    Add more listening data to enrich your graph
+  </Card>
+</CardGroup>

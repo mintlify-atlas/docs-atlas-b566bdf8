@@ -1,0 +1,433 @@
+---
+title: Data ingestion
+description: Fetch listening history from Last.fm and Spotify APIs
+---
+
+The ingestion layer fetches raw listening data from external sources and saves it as JSON for graph construction.
+
+## Last.fm ingestion
+
+### LastfmClient
+
+A wrapper around the Last.fm API that handles authentication and request formatting.
+
+#### Constructor
+
+```typescript
+const client = new LastfmClient(config?);
+```
+
+<ParamField path="config" type="LastfmConfig" optional>
+  Configuration object with `apiKey` and `username`. If omitted, loads from environment variables using `loadLastfmConfig()`.
+</ParamField>
+
+#### request
+
+Make an authenticated API request to Last.fm.
+
+```typescript
+const data = await client.request<ResponseType>(method, params?);
+```
+
+<ParamField path="method" type="string" required>
+  Last.fm API method name (e.g., `"user.getRecentTracks"`, `"user.getInfo"`).
+</ParamField>
+
+<ParamField path="params" type="Record<string, string>" optional>
+  Additional query parameters to include in the request.
+</ParamField>
+
+<ResponseField name="data" type="T">
+  Parsed JSON response from the Last.fm API.
+</ResponseField>
+
+#### verifyAuth
+
+Verify that the API key and username are valid.
+
+```typescript
+const userInfo = await client.verifyAuth();
+```
+
+<ResponseField name="userInfo" type="LastfmUserInfo">
+  User profile information from Last.fm.
+
+  <Expandable title="properties">
+    <ResponseField name="name" type="string">
+      Username
+    </ResponseField>
+    <ResponseField name="realname" type="string">
+      Display name
+    </ResponseField>
+    <ResponseField name="playcount" type="string">
+      Total scrobble count as a string
+    </ResponseField>
+    <ResponseField name="url" type="string">
+      Profile URL
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+### fetchLastfmScrobbles
+
+Fetch the complete scrobble history for a user and save it as JSON.
+
+```typescript
+import { fetchLastfmScrobbles } from "./ingestion/lastfm-fetcher.js";
+import { LastfmClient } from "./ingestion/lastfm-client.js";
+
+const client = new LastfmClient();
+const scrobbles = await fetchLastfmScrobbles(client, options?);
+```
+
+<ParamField path="client" type="LastfmClient" required>
+  Authenticated Last.fm client instance.
+</ParamField>
+
+<ParamField path="options" type="FetchOptions" optional>
+  Fetch configuration options.
+
+  <Expandable title="properties">
+    <ParamField path="dataDir" type="string" optional>
+      Output directory for JSON files. Defaults to `./data`.
+    </ParamField>
+    <ParamField path="onProgress" type="(message: string) => void" optional>
+      Callback for progress updates. Defaults to `console.log`.
+    </ParamField>
+    <ParamField path="fullRefresh" type="boolean" optional>
+      If `true`, ignore any existing checkpoint and fetch all scrobbles from scratch. Defaults to `false`.
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<ResponseField name="scrobbles" type="RawScrobble[]">
+  Array of scrobbles sorted chronologically by timestamp.
+
+  <Expandable title="RawScrobble properties">
+    <ResponseField name="artist" type="string">
+      Artist name
+    </ResponseField>
+    <ResponseField name="track" type="string">
+      Track name
+    </ResponseField>
+    <ResponseField name="album" type="string">
+      Album name
+    </ResponseField>
+    <ResponseField name="timestamp" type="number">
+      Unix timestamp (seconds) of when the track was scrobbled
+    </ResponseField>
+    <ResponseField name="imageUrl" type="string" optional>
+      Album artwork URL from Last.fm
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+#### Resume support
+
+The fetcher automatically saves checkpoints every 10 pages to `data/lastfm-checkpoint.json`. If the fetch is interrupted, running it again will resume from the last checkpoint instead of starting over.
+
+To force a full refresh, pass `fullRefresh: true` in the options.
+
+#### Output files
+
+- **`data/lastfm-scrobbles.json`** - Complete scrobble history
+- **`data/lastfm-checkpoint.json`** - Resume point for interrupted fetches
+
+## Spotify ingestion
+
+### SpotifyAuth
+
+Handles OAuth2 authorization flow and token management for Spotify API access.
+
+#### Constructor
+
+```typescript
+const auth = new SpotifyAuth({ config?, tokenPath? });
+```
+
+<ParamField path="config" type="SpotifyConfig" optional>
+  Spotify app credentials. If omitted, loads from environment variables using `loadSpotifyConfig()`.
+</ParamField>
+
+<ParamField path="tokenPath" type="string" optional>
+  Path to store OAuth tokens. Defaults to `./.spotify-tokens.json`.
+</ParamField>
+
+#### authorize
+
+Run the full OAuth authorization flow. Opens the browser to the Spotify authorization page, starts a local server to receive the callback, exchanges the code for tokens, and saves them to disk.
+
+```typescript
+const tokens = await auth.authorize();
+```
+
+<ResponseField name="tokens" type="SpotifyTokens">
+  OAuth tokens for Spotify API access.
+
+  <Expandable title="properties">
+    <ResponseField name="access_token" type="string">
+      Short-lived access token
+    </ResponseField>
+    <ResponseField name="refresh_token" type="string">
+      Long-lived token for refreshing access
+    </ResponseField>
+    <ResponseField name="expires_at" type="number">
+      Unix timestamp (milliseconds) when the access token expires
+    </ResponseField>
+    <ResponseField name="scope" type="string">
+      Space-separated list of granted scopes
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+#### getAccessToken
+
+Get a valid access token. Automatically loads tokens from disk, refreshes if expired, or throws if no tokens exist.
+
+```typescript
+const token = await auth.getAccessToken();
+```
+
+<ResponseField name="token" type="string">
+  Valid Spotify API access token.
+</ResponseField>
+
+#### hasTokens
+
+Check if tokens exist on disk (user has previously authorized).
+
+```typescript
+const authorized = await auth.hasTokens();
+```
+
+<ResponseField name="authorized" type="boolean">
+  `true` if tokens exist, `false` otherwise.
+</ResponseField>
+
+### SpotifyClient
+
+A wrapper around the Spotify Web API for fetching listening history.
+
+#### Constructor
+
+```typescript
+const client = new SpotifyClient(auth);
+```
+
+<ParamField path="auth" type="SpotifyAuth" required>
+  Authenticated SpotifyAuth instance.
+</ParamField>
+
+#### getRecentlyPlayed
+
+Fetch the user's recently played tracks (max 50 from Spotify's API).
+
+```typescript
+const tracks = await client.getRecentlyPlayed();
+```
+
+<ResponseField name="tracks" type="RawSpotifyRecentTrack[]">
+  Recently played tracks sorted chronologically.
+
+  <Expandable title="RawSpotifyRecentTrack properties">
+    <ResponseField name="spotifyId" type="string">
+      Spotify track ID
+    </ResponseField>
+    <ResponseField name="artist" type="string">
+      Artist name (comma-separated if multiple artists)
+    </ResponseField>
+    <ResponseField name="track" type="string">
+      Track name
+    </ResponseField>
+    <ResponseField name="album" type="string">
+      Album name
+    </ResponseField>
+    <ResponseField name="playedAt" type="string">
+      ISO 8601 timestamp of when the track was played
+    </ResponseField>
+    <ResponseField name="imageUrl" type="string" optional>
+      Album artwork URL from Spotify
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+#### getAllPlaylists
+
+Fetch all of the user's playlists (paginated).
+
+```typescript
+const playlists = await client.getAllPlaylists();
+```
+
+<ResponseField name="playlists" type="PlaylistSummary[]">
+  List of all user playlists with basic metadata.
+</ResponseField>
+
+#### getPlaylistTracks
+
+Fetch all tracks for a single playlist, preserving order.
+
+```typescript
+const tracks = await client.getPlaylistTracks(playlistId, playlistName);
+```
+
+<ParamField path="playlistId" type="string" required>
+  Spotify playlist ID.
+</ParamField>
+
+<ParamField path="playlistName" type="string" required>
+  Playlist name (used for metadata in the output).
+</ParamField>
+
+<ResponseField name="tracks" type="RawSpotifyPlaylistTrack[]">
+  Tracks in playlist order, with position indices.
+
+  <Expandable title="RawSpotifyPlaylistTrack properties">
+    <ResponseField name="spotifyId" type="string">
+      Spotify track ID (empty string for local files)
+    </ResponseField>
+    <ResponseField name="artist" type="string">
+      Artist name (comma-separated if multiple artists)
+    </ResponseField>
+    <ResponseField name="track" type="string">
+      Track name
+    </ResponseField>
+    <ResponseField name="album" type="string">
+      Album name
+    </ResponseField>
+    <ResponseField name="playlistId" type="string">
+      Spotify playlist ID
+    </ResponseField>
+    <ResponseField name="playlistName" type="string">
+      Playlist name
+    </ResponseField>
+    <ResponseField name="position" type="number">
+      Zero-based position within the playlist
+    </ResponseField>
+    <ResponseField name="imageUrl" type="string" optional>
+      Album artwork URL from Spotify
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+#### fetchAll
+
+Fetch all Spotify data: recently played tracks and all playlist tracks.
+
+```typescript
+const dump = await client.fetchAll();
+```
+
+<ResponseField name="dump" type="SpotifyDump">
+  Complete Spotify listening data.
+
+  <Expandable title="properties">
+    <ResponseField name="recentlyPlayed" type="RawSpotifyRecentTrack[]">
+      Recently played tracks (max 50)
+    </ResponseField>
+    <ResponseField name="playlistTracks" type="RawSpotifyPlaylistTrack[]">
+      All tracks from all playlists
+    </ResponseField>
+    <ResponseField name="exportedAt" type="string">
+      ISO 8601 timestamp of when the data was fetched
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+#### exportToJson
+
+Export a Spotify dump to a JSON file.
+
+```typescript
+const dump = await client.exportToJson(outputPath, existingDump?);
+```
+
+<ParamField path="outputPath" type="string" required>
+  Path to write the JSON file.
+</ParamField>
+
+<ParamField path="existingDump" type="SpotifyDump" optional>
+  Pre-fetched dump to write. If omitted, calls `fetchAll()` to fetch fresh data.
+</ParamField>
+
+<ResponseField name="dump" type="SpotifyDump">
+  The dump that was written to disk.
+</ResponseField>
+
+## Configuration
+
+### loadLastfmConfig
+
+Load Last.fm configuration from environment variables.
+
+```typescript
+import { loadLastfmConfig } from "./config.js";
+
+const config = loadLastfmConfig();
+```
+
+<ResponseField name="config" type="LastfmConfig">
+  <Expandable title="properties">
+    <ResponseField name="apiKey" type="string">
+      Last.fm API key (from `LASTFM_API_KEY` env var)
+    </ResponseField>
+    <ResponseField name="username" type="string">
+      Last.fm username (from `LASTFM_USERNAME` env var)
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+Throws an error if required environment variables are missing.
+
+### loadSpotifyConfig
+
+Load Spotify configuration from environment variables.
+
+```typescript
+import { loadSpotifyConfig } from "./config.js";
+
+const config = loadSpotifyConfig();
+```
+
+<ResponseField name="config" type="SpotifyConfig">
+  <Expandable title="properties">
+    <ResponseField name="clientId" type="string">
+      Spotify client ID (from `SPOTIFY_CLIENT_ID` env var)
+    </ResponseField>
+    <ResponseField name="clientSecret" type="string">
+      Spotify client secret (from `SPOTIFY_CLIENT_SECRET` env var)
+    </ResponseField>
+    <ResponseField name="redirectPort" type="number">
+      Port for OAuth callback server (from `SPOTIFY_REDIRECT_PORT` env var, defaults to 8888)
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+Throws an error if required environment variables are missing.
+
+## Example: Complete ingestion workflow
+
+```typescript
+import { LastfmClient } from "./ingestion/lastfm-client.js";
+import { fetchLastfmScrobbles } from "./ingestion/lastfm-fetcher.js";
+import { SpotifyAuth } from "./ingestion/spotify-auth.js";
+import { SpotifyClient } from "./ingestion/spotify-client.js";
+
+// Last.fm ingestion
+const lastfmClient = new LastfmClient();
+await lastfmClient.verifyAuth();
+const lastfmScrobbles = await fetchLastfmScrobbles(lastfmClient);
+
+// Spotify ingestion
+const spotifyAuth = new SpotifyAuth();
+if (!(await spotifyAuth.hasTokens())) {
+  await spotifyAuth.authorize();
+}
+const spotifyClient = new SpotifyClient(spotifyAuth);
+const spotifyDump = await spotifyClient.fetchAll();
+await spotifyClient.exportToJson("./data/spotify-dump.json", spotifyDump);
+
+console.log(`Fetched ${lastfmScrobbles.length} Last.fm scrobbles`);
+console.log(`Fetched ${spotifyDump.recentlyPlayed.length} Spotify recent tracks`);
+console.log(`Fetched ${spotifyDump.playlistTracks.length} Spotify playlist tracks`);
+```

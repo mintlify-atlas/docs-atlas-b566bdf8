@@ -1,0 +1,488 @@
+---
+title: Listening graph
+description: Visual listening history analysis with PageRank and graph algorithms
+---
+
+The listening graph is a standalone analytics system that transforms your music listening history into an interactive, directed graph. Songs become nodes, and sequential plays become weighted edges.
+
+## What is the listening graph
+
+The listening graph captures your listening patterns across multiple data sources. When you play song A followed by song B, an edge is created from A to B. The more times you follow that path, the stronger the connection.
+
+<Info>
+The graph is built from Last.fm scrobbles, Spotify recently played tracks, and Spotify playlist orderings.
+</Info>
+
+### Graph structure
+
+<CardGroup cols={2}>
+  <Card title="Nodes" icon="circle">
+    Each song is a node with metadata: artist, track name, album, play count, PageRank score, and play dates
+  </Card>
+  <Card title="Edges" icon="arrow-right">
+    Directed, weighted edges represent transitions. Weight = number of times song A preceded song B
+  </Card>
+</CardGroup>
+
+## Data model
+
+The core data structure represents a weighted, directed graph.
+
+```typescript
+// From graph-pipeline/src/graph/types.ts
+
+/** Canonical song identity: lowercase(artist) + "::" + lowercase(track_name) */
+type SongKey = string
+
+interface GraphNode {
+    name: string
+    artists: string[]
+    albumName: string
+    spotifyId?: string
+    lastfmUrl?: string
+    imageUrl?: string
+    
+    /** Weighted edges to next songs */
+    next: Record<SongKey, number>
+    
+    /** Weighted edges from previous songs */
+    previous: Record<SongKey, number>
+    
+    totalPlays: number
+    sources: string[]
+    pageRank?: number
+    playDates?: string[]
+}
+
+interface ListeningGraph {
+    nodes: Record<SongKey, GraphNode>
+    metadata: {
+        totalScrobbles: number
+        dateRange: { from: string; to: string }
+        exportTimestamp: string
+        usernames: Record<string, string>
+    }
+}
+```
+
+## Data ingestion
+
+The graph pipeline fetches listening history from multiple sources.
+
+### Last.fm scrobbles
+
+Last.fm provides the most comprehensive listening history via the `user.getRecentTracks` API.
+
+<Steps>
+  <Step title="Paginate through history">
+    ```typescript
+    // From graph-pipeline/src/ingestion/lastfm-fetcher.ts:135-159
+    const firstPage = await client.request<RecentTracksResponse>(
+        "user.getRecentTracks",
+        {
+            user: client.username,
+            limit: String(TRACKS_PER_PAGE),
+            page: "1",
+            ...(fromTimestamp > 0 ? { from: String(fromTimestamp) } : {}),
+        },
+    )
+
+    const totalPages = parseInt(firstPage.recenttracks["@attr"].totalPages, 10)
+    const totalTracks = parseInt(firstPage.recenttracks["@attr"].total, 10)
+
+    log(
+        `Found ${totalTracks} scrobbles across ${totalPages} pages` +
+            (fromTimestamp > 0 ? " (since last checkpoint)" : ""),
+    )
+    ```
+    
+    The fetcher requests 200 tracks per page and respects a 1-second rate limit.
+  </Step>
+  
+  <Step title="Parse track data">
+    ```typescript
+    // From graph-pipeline/src/ingestion/lastfm-fetcher.ts:45-78
+    function parseTrack(track: LastfmApiTrack): RawScrobble | null {
+        if (track["@attr"]?.nowplaying === "true") {
+            return null
+        }
+
+        if (!track.artist["#text"] || !track.name) {
+            return null
+        }
+
+        const timestamp = track.date ? parseInt(track.date.uts, 10) : 0
+        if (timestamp === 0) {
+            return null
+        }
+
+        let imageUrl: string | undefined
+        if (track.image?.length) {
+            const large =
+                track.image.find((img) => img.size === "extralarge") ??
+                track.image.find((img) => img.size === "large")
+            const url = (large ?? track.image[track.image.length - 1])?.[
+                "#text"
+            ]
+            if (url) imageUrl = url
+        }
+
+        return {
+            artist: track.artist["#text"],
+            track: track.name,
+            album: track.album["#text"] ?? "",
+            timestamp,
+            imageUrl,
+        }
+    }
+    ```
+  </Step>
+  
+  <Step title="Save checkpoint">
+    Every 10 pages, a checkpoint is saved to support resuming interrupted fetches.
+
+    ```typescript
+    // From graph-pipeline/src/ingestion/lastfm-fetcher.ts:190-206
+    if (page % 10 === 0) {
+        let latestTimestamp = 0
+        for (const s of newScrobbles) {
+            if (s.timestamp > latestTimestamp)
+                latestTimestamp = s.timestamp
+        }
+        const checkpoint: FetchCheckpoint = {
+            lastTimestamp: latestTimestamp,
+            scrobbleCount: existingScrobbles.length + newScrobbles.length,
+            fetchedAt: new Date().toISOString(),
+        }
+        await writeFile(
+            checkpointPath,
+            JSON.stringify(checkpoint, null, 2),
+        )
+    }
+    ```
+  </Step>
+</Steps>
+
+<Tip>
+The Last.fm fetcher can handle 100k+ scrobbles. A full history fetch typically takes 10-20 minutes due to rate limiting.
+</Tip>
+
+### Spotify recently played
+
+Spotify's Recently Played endpoint provides the last 50 tracks with precise timestamps.
+
+```typescript
+// Uses Spotify Web API: GET /v1/me/player/recently-played
+// Requires scope: user-read-recently-played
+```
+
+### Spotify playlists
+
+Playlist track orderings contribute additional edges to the graph.
+
+```typescript
+// Fetches all user playlists
+// GET /v1/me/playlists
+
+// For each playlist, fetches track ordering
+// GET /v1/playlists/{playlist_id}/tracks
+```
+
+## PageRank algorithm
+
+PageRank identifies your most "important" songs based on how frequently they appear in listening paths.
+
+### How PageRank works
+
+The algorithm treats your listening graph like Google treats the web:
+
+<Steps>
+  <Step title="Initialize ranks">
+    Every song starts with equal rank: `1/N` where N is the total number of songs.
+
+    ```typescript
+    // From graph-pipeline/src/analysis/pagerank.ts:45-56
+    const keys = Object.keys(graph.nodes) as SongKey[]
+    const n = keys.length
+
+    if (n === 0) {
+        return { iterations: 0, converged: true, maxDelta: 0 }
+    }
+
+    const ranks = new Map<SongKey, number>()
+    for (const key of keys) {
+        ranks.set(key, 1 / n)
+    }
+    ```
+  </Step>
+  
+  <Step title="Distribute rank along edges">
+    Each iteration, songs distribute their rank to neighbors proportionally by edge weight.
+
+    ```typescript
+    // From graph-pipeline/src/analysis/pagerank.ts:93-107
+    for (const fromKey of keys) {
+        const node = graph.nodes[fromKey]!
+        const outSum = outWeightSums.get(fromKey)!
+        if (outSum === 0) continue
+
+        const fromRank = ranks.get(fromKey)!
+
+        for (const [toKeyStr, weight] of Object.entries(node.next)) {
+            const toKey = toKeyStr as SongKey
+            const contribution = (fromRank * weight) / outSum
+            newRanks.set(
+                toKey,
+                (newRanks.get(toKey) ?? 0) + d * contribution,
+            )
+        }
+    }
+    ```
+  </Step>
+  
+  <Step title="Apply damping factor">
+    The damping factor (default 0.85) represents the probability of following an edge vs. randomly jumping to any song.
+
+    ```typescript
+    // From graph-pipeline/src/analysis/pagerank.ts:35-43
+    export interface PageRankOptions {
+        /** Damping factor (probability of following a link vs. random jump). Default: 0.85. */
+        dampingFactor?: number
+        /** Stop when max rank change between iterations is below this. Default: 0.0001. */
+        convergenceThreshold?: number
+        /** Maximum number of iterations. Default: 100. */
+        maxIterations?: number
+    }
+    ```
+  </Step>
+  
+  <Step title="Check convergence">
+    The algorithm stops when ranks stabilize or the max iteration count is reached.
+
+    ```typescript
+    // From graph-pipeline/src/analysis/pagerank.ts:110-124
+    maxDelta = 0
+    for (const key of keys) {
+        const delta = Math.abs(newRanks.get(key)! - ranks.get(key)!)
+        if (delta > maxDelta) maxDelta = delta
+    }
+
+    for (const [key, rank] of newRanks) {
+        ranks.set(key, rank)
+    }
+
+    if (maxDelta < convergenceThreshold) {
+        converged = true
+    }
+    ```
+  </Step>
+</Steps>
+
+### Top songs by PageRank
+
+You can extract the highest-ranked songs after computing PageRank:
+
+```typescript
+// From graph-pipeline/src/analysis/pagerank.ts:136-161
+export function getTopByPageRank(
+    graph: ListeningGraph,
+    n: number = 20,
+): Array<{
+    songKey: SongKey
+    name: string
+    artists: string[]
+    pageRank: number
+}> {
+    const entries = (
+        Object.entries(graph.nodes) as [
+            SongKey,
+            (typeof graph.nodes)[SongKey],
+        ][]
+    )
+        .filter(([, node]) => node.pageRank != null)
+        .map(([key, node]) => ({
+            songKey: key,
+            name: node.name,
+            artists: node.artists,
+            pageRank: node.pageRank!,
+        }))
+        .sort((a, b) => b.pageRank - a.pageRank)
+
+    return entries.slice(0, n)
+}
+```
+
+## Visualization
+
+The graph frontend renders your listening graph using Sigma.js with three layout algorithms.
+
+### Layout algorithms
+
+<Tabs>
+  <Tab title="PageRank layout">
+    High-PageRank songs are positioned near the center, low-ranked songs pushed outward.
+
+    ```typescript
+    // From graph-frontend/src/graph-utils/pageRank.ts:16-37
+    export function calculatePageRankPositions(
+        graph: Graph<NodeAttributes, EdgeAttributes>,
+    ): Map<string, { x: number; y: number }> {
+        const result = new Map<string, { x: number; y: number }>()
+
+        let maxPageRank = 1e-10
+        graph.forEachNode((_key, attrs) => {
+            if (attrs.pageRank > maxPageRank) maxPageRank = attrs.pageRank
+        })
+
+        graph.forEachNode((key, attrs) => {
+            const importance = attrs.pageRank / maxPageRank
+            const angle = hashAngle(key)
+            const radius = Math.pow(1 - importance, 2) * 500
+            result.set(key, {
+                x: Math.cos(angle) * radius,
+                y: Math.sin(angle) * radius,
+            })
+        })
+
+        return result
+    }
+    ```
+  </Tab>
+  
+  <Tab title="MDS layout">
+    Multidimensional scaling positions nodes based on graph distance, clustering related songs.
+  </Tab>
+  
+  <Tab title="Weighted MDS">
+    Similar to MDS but weights distances by edge strength, pulling frequently co-listened songs closer.
+  </Tab>
+</Tabs>
+
+### Interactive features
+
+The visualization supports:
+
+<CardGroup cols={2}>
+  <Card title="Date filtering" icon="calendar">
+    Filter the graph to show only songs played within a specific date range
+  </Card>
+  <Card title="Node selection" icon="hand-pointer">
+    Click a song to highlight it and its immediate neighbors
+  </Card>
+  <Card title="Component coloring" icon="palette">
+    Disconnected graph components are colored differently
+  </Card>
+  <Card title="Dynamic sizing" icon="chart-scatter">
+    Node size scales with PageRank, play count, or degree depending on layout
+  </Card>
+</CardGroup>
+
+### Loading the graph
+
+The frontend fetches the graph JSON from the API:
+
+```typescript
+// From graph-frontend/src/contexts/graphContext.tsx:36-44
+async function fetchGraph(): Promise<ListeningGraph> {
+    const response = await fetch(`${GRAPH_API_BASE}/graph`)
+    if (!response.ok) {
+        throw new Error(
+            `Failed to fetch graph: ${response.status} ${response.statusText}`,
+        )
+    }
+    return response.json()
+}
+```
+
+Then converts it to Graphology format:
+
+```typescript
+// From graph-frontend/src/contexts/graphContext.tsx:47-103
+function toGraphology(
+    listeningGraph: ListeningGraph,
+): Graph<NodeAttributes, EdgeAttributes> {
+    const graph = new Graph<NodeAttributes, EdgeAttributes>()
+    const entries = Object.entries(listeningGraph.nodes)
+
+    // Add all nodes
+    for (const [key, node] of entries) {
+        graph.addNode(key, {
+            label: `${node.artists[0] ?? "Unknown"} — ${node.name}`,
+            artists: node.artists,
+            albumName: node.albumName,
+            spotifyId: node.spotifyId,
+            lastfmUrl: node.lastfmUrl,
+            imageUrl: node.imageUrl,
+            totalPlays: node.totalPlays,
+            sources: node.sources,
+            pageRank: node.pageRank ?? 0,
+            playDates: node.playDates ?? [],
+            size: 4,
+            color: "#ffffff",
+            x: 0,
+            y: 0,
+        })
+    }
+
+    // Add all edges
+    for (const [fromKey, node] of entries) {
+        for (const [toKey, weight] of Object.entries(node.next)) {
+            if (!graph.hasNode(toKey)) continue
+            if (graph.hasEdge(fromKey, toKey)) continue
+
+            graph.addDirectedEdge(fromKey, toKey, {
+                weight,
+                size: Math.max(0.5, Math.min(3, Math.log(weight + 1))),
+                color: `rgba(0, 0, 0, ${Math.min(0.6, 0.15 + weight * 0.05)})`,
+            })
+        }
+    }
+
+    // Color each component
+    const components = connectedComponents(graph)
+    for (let i = 0; i < components.length; i++) {
+        const color = COMPONENT_COLORS[i % COMPONENT_COLORS.length]
+        for (const key of components[i]) {
+            graph.setNodeAttribute(key, "color", color)
+        }
+    }
+
+    return graph
+}
+```
+
+## Pipeline architecture
+
+The graph pipeline is a TypeScript CLI application:
+
+```bash
+# Fetch Last.fm scrobbles
+npm run fetch:lastfm
+
+# Fetch Spotify data
+npm run fetch:spotify
+
+# Build the graph
+npm run build:graph
+
+# Compute PageRank
+npm run analyze:pagerank
+
+# Export final JSON
+npm run export
+```
+
+<Info>
+The pipeline outputs a single `graph.json` file that the frontend visualization consumes.
+</Info>
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Rotations system" icon="rotate" href="/features/rotations">
+    Return to the core rotation system documentation
+  </Card>
+  <Card title="Import sources" icon="download" href="/features/import-sources">
+    Learn how to import music for graph analysis
+  </Card>
+</CardGroup>

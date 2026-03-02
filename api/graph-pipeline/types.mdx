@@ -1,0 +1,364 @@
+---
+title: Core types
+description: TypeScript interfaces for graph nodes and data structures
+---
+
+Core types for the Rotations listening history graph pipeline.
+
+## Song identity
+
+### SongKey
+
+Canonical song identity used throughout the graph: `lowercase(artist)::lowercase(track_name)`.
+
+```typescript
+type SongKey = `${string}::${string}`;
+```
+
+This format enables cross-source matching — the same song from Last.fm and Spotify resolves to the same key regardless of minor formatting differences.
+
+#### Examples
+
+```typescript
+"radiohead::paranoid android"
+"the beatles::hey jude"
+"kendrick lamar::m.a.a.d city"
+```
+
+### toSongKey
+
+Create a canonical SongKey from artist and track name. Lowercases and trims both inputs for consistent cross-source matching.
+
+```typescript
+import { toSongKey } from "./graph/types.js";
+
+const key = toSongKey(artist, track);
+```
+
+<ParamField path="artist" type="string" required>
+  Artist name (will be lowercased and trimmed).
+</ParamField>
+
+<ParamField path="track" type="string" required>
+  Track name (will be lowercased and trimmed).
+</ParamField>
+
+<ResponseField name="key" type="SongKey">
+  Canonical song key in the format `"artist::track"`.
+</ResponseField>
+
+#### Example
+
+```typescript
+const key1 = toSongKey("Radiohead", "Paranoid Android");
+const key2 = toSongKey("radiohead", "paranoid android");
+const key3 = toSongKey(" RADIOHEAD ", " Paranoid Android ");
+
+// All three produce the same key:
+// "radiohead::paranoid android"
+assert(key1 === key2 && key2 === key3);
+```
+
+### TrackId
+
+TrackId from the local library (site/src/shared/types.ts). A GraphNode may optionally link back to a TrackId if the song also exists in the local library.
+
+```typescript
+type TrackId = `track-${string}`;
+```
+
+### ListeningSource
+
+Data source for listening history.
+
+```typescript
+type ListeningSource = "lastfm" | "spotify-recent" | "spotify-playlist";
+```
+
+- **`lastfm`** - Last.fm scrobbles from `user.getRecentTracks`
+- **`spotify-recent`** - Spotify recently played tracks from `/v1/me/player/recently-played`
+- **`spotify-playlist`** - Tracks from Spotify playlists
+
+## Graph structure
+
+### GraphNode
+
+A node in the listening graph representing a single song.
+
+```typescript
+interface GraphNode {
+  name: string;
+  artists: string[];
+  albumName?: string;
+  spotifyId?: string;
+  lastfmUrl?: string;
+  trackId?: TrackId;
+  next: Record<SongKey, number>;
+  previous: Record<SongKey, number>;
+  totalPlays: number;
+  sources: ListeningSource[];
+  sourcePlays?: Partial<Record<ListeningSource, number>>;
+  pageRank?: number;
+  clusterId?: number;
+  imageUrl?: string;
+  playDates: string[];
+}
+```
+
+<ResponseField name="name" type="string">
+  Track name
+</ResponseField>
+
+<ResponseField name="artists" type="string[]">
+  Artist names (usually one, but can be multiple for collaborations)
+</ResponseField>
+
+<ResponseField name="albumName" type="string" optional>
+  Album name
+</ResponseField>
+
+<ResponseField name="spotifyId" type="string" optional>
+  Spotify track ID (if the song was seen in Spotify data)
+</ResponseField>
+
+<ResponseField name="lastfmUrl" type="string" optional>
+  Last.fm track page URL
+</ResponseField>
+
+<ResponseField name="trackId" type="TrackId" optional>
+  Link back to the local library's TrackId, if this song exists there
+</ResponseField>
+
+<ResponseField name="next" type="Record<SongKey, number>">
+  Weighted outgoing edges: SongKey → count of transitions from this song to that song.
+  
+  If this song was followed by song B three times across all sources, `next[keyB] = 3`.
+</ResponseField>
+
+<ResponseField name="previous" type="Record<SongKey, number>">
+  Weighted incoming edges: SongKey → count of transitions from that song to this song.
+  
+  Mirror of the source node's `next` entry: `nodeB.previous[keyA] = nodeA.next[keyB]`.
+</ResponseField>
+
+<ResponseField name="totalPlays" type="number">
+  Total play count across all sources
+</ResponseField>
+
+<ResponseField name="sources" type="ListeningSource[]">
+  List of data sources where this song was seen (e.g., `["lastfm", "spotify-playlist"]`)
+</ResponseField>
+
+<ResponseField name="sourcePlays" type="Partial<Record<ListeningSource, number>>" optional>
+  Play count breakdown by source (e.g., `{ "lastfm": 10, "spotify-playlist": 2 }`)
+</ResponseField>
+
+<ResponseField name="pageRank" type="number" optional>
+  PageRank score (set by `computePageRank()`, see [analysis functions](/api/graph-pipeline/analysis#pagerank))
+</ResponseField>
+
+<ResponseField name="clusterId" type="number" optional>
+  Cluster/community ID (set by `detectClusters()`, see [analysis functions](/api/graph-pipeline/analysis#clustering))
+</ResponseField>
+
+<ResponseField name="imageUrl" type="string" optional>
+  Album artwork URL (from Last.fm or Spotify)
+</ResponseField>
+
+<ResponseField name="playDates" type="string[]">
+  ISO 8601 timestamps of every play across all sources, sorted chronologically
+</ResponseField>
+
+### ListeningGraph
+
+The full listening graph: all nodes + metadata.
+
+```typescript
+interface ListeningGraph {
+  nodes: Record<SongKey, GraphNode>;
+  metadata: GraphMetadata;
+}
+```
+
+<ResponseField name="nodes" type="Record<SongKey, GraphNode>">
+  All songs in the graph, keyed by SongKey
+</ResponseField>
+
+<ResponseField name="metadata" type="GraphMetadata">
+  Graph-level metadata.
+
+  <Expandable title="GraphMetadata properties">
+    <ResponseField name="totalScrobbles" type="number">
+      Total play count across all sources and songs
+    </ResponseField>
+    <ResponseField name="dateRange" type="{ from: string; to: string }">
+      ISO 8601 date range of listening history
+    </ResponseField>
+    <ResponseField name="exportTimestamp" type="string">
+      ISO 8601 timestamp of when the graph was built
+    </ResponseField>
+    <ResponseField name="lastfmUsername" type="string" optional>
+      Last.fm username (if Last.fm data was included)
+    </ResponseField>
+    <ResponseField name="spotifyUsername" type="string" optional>
+      Spotify username (if Spotify data was included)
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+## Example: Accessing graph data
+
+```typescript
+import type { ListeningGraph, SongKey, GraphNode } from "./graph/types.js";
+import { toSongKey } from "./graph/types.js";
+
+function printNodeInfo(graph: ListeningGraph, artist: string, track: string) {
+  const key = toSongKey(artist, track);
+  const node = graph.nodes[key];
+  
+  if (!node) {
+    console.log(`Song not found: ${artist} - ${track}`);
+    return;
+  }
+  
+  console.log(`${node.artists.join(", ")} - ${node.name}`);
+  console.log(`  Plays: ${node.totalPlays}`);
+  console.log(`  Sources: ${node.sources.join(", ")}`);
+  console.log(`  Outgoing edges: ${Object.keys(node.next).length}`);
+  console.log(`  Incoming edges: ${Object.keys(node.previous).length}`);
+  
+  if (node.pageRank) {
+    console.log(`  PageRank: ${node.pageRank.toFixed(6)}`);
+  }
+  
+  if (node.clusterId !== undefined) {
+    console.log(`  Cluster: ${node.clusterId}`);
+  }
+  
+  // Print top 5 outgoing edges
+  const topNext = Object.entries(node.next)
+    .sort(([, a], [, b]) => b - a)
+    .slice(0, 5);
+  
+  if (topNext.length > 0) {
+    console.log(`  Top outgoing edges:`);
+    topNext.forEach(([targetKey, weight]) => {
+      const targetNode = graph.nodes[targetKey as SongKey];
+      if (targetNode) {
+        console.log(`    → ${targetNode.artists.join(", ")} - ${targetNode.name} [${weight}]`);
+      }
+    });
+  }
+}
+
+// Usage
+printNodeInfo(graph, "Radiohead", "Paranoid Android");
+```
+
+## Raw data types
+
+Types for raw data from ingestion APIs (used by `buildGraph()`).
+
+### RawScrobble
+
+A single scrobble from Last.fm's `user.getRecentTracks` API.
+
+```typescript
+interface RawScrobble {
+  artist: string;
+  track: string;
+  album: string;
+  timestamp: number; // Unix timestamp (seconds)
+  imageUrl?: string;
+}
+```
+
+### RawSpotifyRecentTrack
+
+A single track from Spotify's `/v1/me/player/recently-played` endpoint.
+
+```typescript
+interface RawSpotifyRecentTrack {
+  spotifyId: string;
+  artist: string;
+  track: string;
+  album: string;
+  playedAt: string; // ISO 8601 timestamp
+  imageUrl?: string;
+}
+```
+
+### RawSpotifyPlaylistTrack
+
+A single track from a Spotify playlist, with its position in that playlist.
+
+```typescript
+interface RawSpotifyPlaylistTrack {
+  spotifyId: string;
+  artist: string;
+  track: string;
+  album: string;
+  playlistId: string;
+  playlistName: string;
+  position: number; // Zero-based position
+  imageUrl?: string;
+}
+```
+
+### GraphInput
+
+Input data for `buildGraph()`. All fields are optional — build with whatever sources are available.
+
+```typescript
+interface GraphInput {
+  lastfmScrobbles?: RawScrobble[];
+  spotifyRecentTracks?: RawSpotifyRecentTrack[];
+  spotifyPlaylistTracks?: RawSpotifyPlaylistTrack[];
+  lastfmUsername?: string;
+  spotifyUsername?: string;
+}
+```
+
+## Example: Building a graph
+
+```typescript
+import { buildGraph } from "./graph/build-graph.js";
+import type { GraphInput, ListeningGraph } from "./graph/types.js";
+
+const input: GraphInput = {
+  lastfmScrobbles: [
+    {
+      artist: "Radiohead",
+      track: "Paranoid Android",
+      album: "OK Computer",
+      timestamp: 1609459200,
+      imageUrl: "https://lastfm.freetls.fastly.net/i/u/300x300/abc123.jpg"
+    },
+    {
+      artist: "Radiohead",
+      track: "Karma Police",
+      album: "OK Computer",
+      timestamp: 1609459500
+    }
+  ],
+  spotifyPlaylistTracks: [
+    {
+      spotifyId: "6LgJvl0Xdtc73RJ1mmpotq",
+      artist: "Radiohead",
+      track: "Paranoid Android",
+      album: "OK Computer",
+      playlistId: "37i9dQZF1DXcBWIGoYBM5M",
+      playlistName: "90s Rock",
+      position: 0
+    }
+  ],
+  lastfmUsername: "example_user",
+  spotifyUsername: "spotify_user"
+};
+
+const graph: ListeningGraph = buildGraph(input);
+
+console.log(`Built graph with ${Object.keys(graph.nodes).length} songs`);
+console.log(`Total plays: ${graph.metadata.totalScrobbles}`);
+console.log(`Date range: ${graph.metadata.dateRange.from} to ${graph.metadata.dateRange.to}`);
+```

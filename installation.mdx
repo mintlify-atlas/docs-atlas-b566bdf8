@@ -1,0 +1,297 @@
+---
+title: Installation
+description: Set up Rotations for local development or production use
+---
+
+## Overview
+
+Rotations is a frontend-only web application built with Astro and React. You can run it locally for development or build it for production deployment.
+
+<Info>
+  Rotations runs entirely in the browser. No backend server is required for core functionality, though some features like Spotify integration use API routes.
+</Info>
+
+## Prerequisites
+
+Before you begin, make sure you have:
+
+- **Node.js** (v18 or higher)
+- **Yarn** (v1.22.22 or higher)
+- A modern web browser (Chrome, Firefox, Safari, or Edge)
+
+## Local development setup
+
+<Steps>
+  <Step title="Clone the repository">
+    Get the Rotations source code:
+    
+    ```bash
+    git clone https://github.com/cdxker/rotations
+    cd rotations
+    ```
+  </Step>
+  
+  <Step title="Install dependencies">
+    Navigate to the site directory and install packages:
+    
+    ```bash
+    cd site
+    yarn
+    ```
+    
+    <CodeGroup>
+    ```json package.json
+    {
+      "dependencies": {
+        "astro": "^5.10.0",
+        "react": "^19.2.0",
+        "@react-sigma/core": "^5.0.6",
+        "graphology": "^0.26.0",
+        "tinybase": "^7.0.1"
+      }
+    }
+    ```
+    </CodeGroup>
+  </Step>
+  
+  <Step title="Start the development server">
+    Run the dev server with hot reload:
+    
+    ```bash
+    yarn dev
+    ```
+    
+    The application will be available at `http://localhost:4321` (or another port if 4321 is taken).
+    
+    <Note>
+      The `--host` flag in the dev script allows access from other devices on your network.
+    </Note>
+  </Step>
+  
+  <Step title="Verify the installation">
+    Open your browser and navigate to the local URL. You should see the Rotations welcome screen.
+    
+    If everything is working, you're ready to start adding music!
+  </Step>
+</Steps>
+
+## Building for production
+
+To create an optimized production build:
+
+<Steps>
+  <Step title="Build the application">
+    Compile TypeScript and bundle assets:
+    
+    ```bash
+    cd site
+    yarn build
+    ```
+    
+    This creates a `dist/` directory with your production-ready files.
+  </Step>
+  
+  <Step title="Preview the build">
+    Test the production build locally:
+    
+    ```bash
+    yarn preview
+    ```
+    
+    This serves the built files to verify everything works correctly.
+  </Step>
+  
+  <Step title="Deploy">
+    Deploy the `dist/` directory to your hosting platform of choice:
+    
+    - **Vercel**: Connect your repo and deploy automatically
+    - **Netlify**: Drag and drop the `dist/` folder
+    - **Static hosting**: Upload files to any web server
+    
+    <Tip>
+      Since Rotations is a static site with API routes, platforms like Vercel and Netlify work best for handling the serverless functions.
+    </Tip>
+  </Step>
+</Steps>
+
+## Project structure
+
+Here's how the Rotations codebase is organized:
+
+```plaintext
+rotations/
+├── site/                    # Main web application
+│   ├── src/
+│   │   ├── components/      # React components
+│   │   │   ├── PlayerView.tsx
+│   │   │   ├── GraphView.tsx
+│   │   │   └── AddMusicButton.tsx
+│   │   ├── hooks/           # React hooks
+│   │   │   ├── PlayerContext.tsx
+│   │   │   └── SpotifyContext.tsx
+│   │   ├── lib/             # Core libraries
+│   │   │   ├── store.ts     # TinyBase database
+│   │   │   └── musicCache.ts
+│   │   ├── pages/           # Astro pages
+│   │   │   └── api/         # API routes
+│   │   └── shared/          # Shared types
+│   ├── package.json
+│   └── tsconfig.json
+├── graph-pipeline/          # Graph processing
+└── graph-frontend/          # Graph visualization
+```
+
+## Configuration
+
+### Environment variables
+
+For Spotify integration, create a `.env` file in the `site/` directory:
+
+```bash .env
+SPOTIFY_CLIENT_ID=your_client_id
+SPOTIFY_CLIENT_SECRET=your_client_secret
+SPOTIFY_REDIRECT_URI=http://localhost:4321/api/spotify/callback
+```
+
+<Warning>
+  Never commit your `.env` file to version control. Add it to `.gitignore`.
+</Warning>
+
+### Data storage
+
+Rotations uses **TinyBase** for local data persistence:
+
+<CodeGroup>
+```typescript store.ts
+const store = createStore()
+  .setTablesSchema({
+    playlists: {
+      id: { type: "string" },
+      track_cover_uri: { type: "string" },
+      name: { type: "string" },
+      artists: { type: "string" },
+      first_track_id: { type: "string" },
+      source: { type: "string" },
+    },
+    tracks: {
+      id: { type: "string" },
+      playlist_id: { type: "string" },
+      time_ms: { type: "number" },
+      name: { type: "string" },
+      artists: { type: "string" },
+      tags: { type: "string" },
+      stream_url: { type: "string" },
+      next_tracks: { type: "string" },
+    },
+  })
+```
+</CodeGroup>
+
+Data is automatically persisted to `localStorage` using:
+
+```typescript
+const persister = createLocalPersister(store, "fucking-music-store")
+await persister.load()
+await persister.startAutoSave()
+```
+
+## Development scripts
+
+Available commands in the `site/` directory:
+
+| Command | Description |
+|---------|-------------|
+| `yarn dev` | Start dev server with hot reload |
+| `yarn build` | Build for production |
+| `yarn preview` | Preview production build |
+| `yarn test` | Run Vitest tests |
+| `yarn format` | Format code with Prettier |
+| `yarn lint` | Lint code with ESLint |
+
+## Technology stack
+
+Rotations is built with:
+
+<CardGroup cols={2}>
+  <Card title="Astro" icon="rocket">
+    Static site framework for optimal performance
+  </Card>
+  
+  <Card title="React" icon="react">
+    UI components and state management
+  </Card>
+  
+  <Card title="TinyBase" icon="database">
+    Local-first database with automatic persistence
+  </Card>
+  
+  <Card title="Sigma.js" icon="project-diagram">
+    Interactive graph visualization library
+  </Card>
+  
+  <Card title="Graphology" icon="share-nodes">
+    Graph data structure and algorithms
+  </Card>
+  
+  <Card title="Tailwind CSS" icon="palette">
+    Utility-first styling framework
+  </Card>
+</CardGroup>
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Port already in use">
+    If port 4321 is taken, Astro will automatically use the next available port. Check your terminal output for the actual URL.
+  </Accordion>
+  
+  <Accordion title="Module not found errors">
+    Make sure you ran `yarn` in the correct directory:
+    
+    ```bash
+    cd site
+    yarn
+    ```
+    
+    If issues persist, try:
+    
+    ```bash
+    rm -rf node_modules yarn.lock
+    yarn
+    ```
+  </Accordion>
+  
+  <Accordion title="TypeScript errors">
+    Run the type checker to see detailed errors:
+    
+    ```bash
+    yarn lint
+    ```
+    
+    This runs ESLint and TypeScript's `tsc --noEmit`.
+  </Accordion>
+  
+  <Accordion title="Build fails">
+    Common issues:
+    
+    1. **Missing environment variables**: Check your `.env` file
+    2. **TypeScript errors**: Run `yarn lint` to see all errors
+    3. **Out of memory**: Increase Node's memory limit:
+    
+    ```bash
+    NODE_OPTIONS=--max-old-space-size=4096 yarn build
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Quick start" icon="rocket" href="/quickstart">
+    Learn how to use Rotations
+  </Card>
+  
+  <Card title="Contributing" icon="code-branch" href="/contributing">
+    Help improve Rotations
+  </Card>
+</CardGroup>

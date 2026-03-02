@@ -1,0 +1,380 @@
+---
+title: Player state and controls
+description: React context and hooks for managing playback state and controls
+---
+
+The player system provides React context and hooks for managing music playback, including track selection, play/pause controls, seeking, and integration with Spotify Web Playback SDK.
+
+## Player context
+
+### usePlayer()
+
+Accesses the player context. Must be used within a `PlayerProvider`.
+
+```typescript
+function usePlayer(): PlayerContextValue
+```
+
+**Example**
+
+```typescript
+import { usePlayer } from "@/hooks/PlayerContext"
+
+function NowPlaying() {
+  const { currentTrack, isPlaying, togglePlayPause } = usePlayer()
+  
+  return (
+    <div>
+      <h2>{currentTrack?.name}</h2>
+      <button onClick={togglePlayPause}>
+        {isPlaying ? "Pause" : "Play"}
+      </button>
+    </div>
+  )
+}
+```
+
+<Warning>
+Calling `usePlayer()` outside of a `PlayerProvider` will throw an error.
+</Warning>
+
+## Player state
+
+The `PlayerContextValue` provides access to current playback state:
+
+### Current playback
+
+<ResponseField name="playlist" type="FuckingPlaylist | undefined">
+  The currently loaded playlist
+</ResponseField>
+
+<ResponseField name="tracks" type="FuckingTrack[]">
+  All tracks in the current playlist
+</ResponseField>
+
+<ResponseField name="currentTrack" type="FuckingTrack | null">
+  The currently playing track (derived from `tracks[currentTrackIndex]`)
+</ResponseField>
+
+<ResponseField name="currentTrackIndex" type="number">
+  Index of the current track in the tracks array
+</ResponseField>
+
+<ResponseField name="currentTimeMs" type="number">
+  Current playback position in milliseconds
+</ResponseField>
+
+<ResponseField name="isPlaying" type="boolean">
+  Whether the player is currently playing
+</ResponseField>
+
+<ResponseField name="totalDuration" type="number">
+  Total duration of the current track in milliseconds
+</ResponseField>
+
+### Spotify integration
+
+<ResponseField name="spotifyDeviceId" type="string | null">
+  The Spotify Web Playback SDK device ID (null if not connected)
+</ResponseField>
+
+## Playback controls
+
+### togglePlayPause()
+
+Toggles between play and pause states. Automatically handles both HTML5 audio and Spotify playback.
+
+```typescript
+togglePlayPause(): void
+```
+
+**Example**
+
+```typescript
+const { togglePlayPause, isPlaying } = usePlayer()
+
+<button onClick={togglePlayPause}>
+  {isPlaying ? "⏸️ Pause" : "▶️ Play"}
+</button>
+```
+
+### handleSeek()
+
+Seeks to a specific position in the current track.
+
+```typescript
+handleSeek(value: number): void
+```
+
+<ParamField path="value" type="number" required>
+  The target position in milliseconds
+</ParamField>
+
+**Example**
+
+```typescript
+const { handleSeek, currentTimeMs, totalDuration } = usePlayer()
+
+<input
+  type="range"
+  min={0}
+  max={totalDuration}
+  value={currentTimeMs}
+  onChange={(e) => handleSeek(Number(e.target.value))}
+/>
+```
+
+### handleTrackSelect()
+
+Selects and plays a track by index.
+
+```typescript
+handleTrackSelect(index: number): Promise<void>
+```
+
+<ParamField path="index" type="number" required>
+  The index of the track to play (0-based)
+</ParamField>
+
+**Example**
+
+```typescript
+const { tracks, handleTrackSelect, currentTrackIndex } = usePlayer()
+
+{tracks.map((track, index) => (
+  <button
+    key={track.id}
+    onClick={() => handleTrackSelect(index)}
+    disabled={index === currentTrackIndex}
+  >
+    {track.name}
+  </button>
+))}
+```
+
+### handleNextTrack()
+
+Skips to the next track in the playlist.
+
+```typescript
+handleNextTrack(): Promise<void>
+```
+
+**Example**
+
+```typescript
+const { handleNextTrack, currentTrackIndex, tracks } = usePlayer()
+const isLastTrack = currentTrackIndex >= tracks.length - 1
+
+<button onClick={handleNextTrack} disabled={isLastTrack}>
+  Next ⏭️
+</button>
+```
+
+### handlePrevTrack()
+
+Skips to the previous track in the playlist.
+
+```typescript
+handlePrevTrack(): Promise<void>
+```
+
+**Example**
+
+```typescript
+const { handlePrevTrack, currentTrackIndex } = usePlayer()
+const isFirstTrack = currentTrackIndex === 0
+
+<button onClick={handlePrevTrack} disabled={isFirstTrack}>
+  ⏮️ Previous
+</button>
+```
+
+## Data management
+
+### setPlaylistAndTracks()
+
+Loads a playlist and its tracks from the database, optionally starting at a specific track.
+
+```typescript
+setPlaylistAndTracks(params: SetPlaylistAndTracksParams): void
+```
+
+<ParamField path="params.playlistId" type="PlaylistId" required>
+  The playlist ID to load
+</ParamField>
+
+<ParamField path="params.startingTrackId" type="TrackId">
+  Optional track ID to start playing from (defaults to first track)
+</ParamField>
+
+**Example**
+
+```typescript
+const { setPlaylistAndTracks } = usePlayer()
+
+// Load playlist from beginning
+setPlaylistAndTracks({
+  playlistId: "play-spotify-37i9dQZF1DXcBWIGoYBM5M"
+})
+
+// Resume from specific track
+setPlaylistAndTracks({
+  playlistId: "play-spotify-37i9dQZF1DXcBWIGoYBM5M",
+  startingTrackId: "track-spotify-6rqhFgbbKwnb9MLmUQDhG6"
+})
+```
+
+### addPlaylists()
+
+Adds multiple playlists to the database. Skips playlists that already exist.
+
+```typescript
+addPlaylists(playlists: FuckingPlaylist[]): void
+```
+
+<ParamField path="playlists" type="FuckingPlaylist[]" required>
+  Array of playlist objects to add
+</ParamField>
+
+**Example**
+
+```typescript
+const { addPlaylists } = usePlayer()
+
+const newPlaylists = await fetchSpotifyPlaylists()
+addPlaylists(newPlaylists)
+```
+
+### addTracks()
+
+Adds tracks to the database for a specific playlist. Skips tracks that already exist.
+
+```typescript
+addTracks(tracks: FuckingTrack[], playlistId: PlaylistId): void
+```
+
+<ParamField path="tracks" type="FuckingTrack[]" required>
+  Array of track objects to add
+</ParamField>
+
+<ParamField path="playlistId" type="PlaylistId" required>
+  The playlist ID these tracks belong to
+</ParamField>
+
+**Example**
+
+```typescript
+const { addTracks } = usePlayer()
+
+const playlistTracks = await fetchPlaylistTracks(playlistId)
+addTracks(playlistTracks, playlistId)
+```
+
+### setCurrentTimeMs()
+
+Manually updates the current playback time. Primarily used internally for syncing with Spotify.
+
+```typescript
+setCurrentTimeMs(timeMs: number): void
+```
+
+<ParamField path="timeMs" type="number" required>
+  The playback position in milliseconds
+</ParamField>
+
+## Spotify integration
+
+### setSpotifyDeviceId()
+
+Sets the Spotify Web Playback SDK device ID. Called automatically when the Spotify player connects.
+
+```typescript
+setSpotifyDeviceId(id: string | null): void
+```
+
+<ParamField path="id" type="string | null" required>
+  The device ID from Spotify Web Playback SDK
+</ParamField>
+
+### setSpotifyPlayer()
+
+Sets the Spotify player instance reference. Used internally for Spotify-specific controls.
+
+```typescript
+setSpotifyPlayer(player: SpotifyPlayerInstance | null): void
+```
+
+<ParamField path="player" type="SpotifyPlayerInstance | null" required>
+  The Spotify player instance
+</ParamField>
+
+## Player provider
+
+Wrap your application with `PlayerProvider` to enable player context:
+
+```typescript
+import { PlayerProvider } from "@/hooks/PlayerContext"
+import { db } from "@/lib/store"
+
+function App() {
+  useEffect(() => {
+    db.init()
+  }, [])
+  
+  return (
+    <PlayerProvider
+      initialPlaylist={undefined}
+      initialTracks={[]}
+      initialTrackIndex={0}
+      initialTimeMs={0}
+    >
+      <YourApp />
+    </PlayerProvider>
+  )
+}
+```
+
+### Provider props
+
+<ParamField path="initialPlaylist" type="FuckingPlaylist | undefined">
+  Optional playlist to load on mount
+</ParamField>
+
+<ParamField path="initialTracks" type="FuckingTrack[]" default="[]">
+  Initial tracks array
+</ParamField>
+
+<ParamField path="initialTrackIndex" type="number" default="0">
+  Index of the track to start with
+</ParamField>
+
+<ParamField path="initialTimeMs" type="number" default="0">
+  Initial playback position in milliseconds
+</ParamField>
+
+## Automatic state persistence
+
+The player automatically saves state to the database:
+
+- **Every 5 seconds** during playback
+- **On unmount** to preserve state across page reloads
+- **On track changes** to update the active track
+
+```typescript
+// PlayerContext.tsx:271-275
+const interval = setInterval(savePlayerState, 5000)
+savePlayerState()
+```
+
+State is saved to localStorage via TinyBase and can be restored using:
+
+```typescript
+const state = db.getPlayerState()
+if (state) {
+  setPlaylistAndTracks({
+    playlistId: state.lastPlaylistId,
+    startingTrackId: state.activeTrack
+  })
+}
+```

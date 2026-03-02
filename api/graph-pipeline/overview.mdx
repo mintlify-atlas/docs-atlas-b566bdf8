@@ -1,0 +1,144 @@
+---
+title: Graph pipeline overview
+description: Build and analyze music listening graphs from Last.fm and Spotify data
+---
+
+The Rotations graph pipeline transforms listening history from multiple sources into a unified directed graph, where nodes represent songs and weighted edges represent sequential listening patterns.
+
+## What it does
+
+The pipeline performs three main operations:
+
+1. **Ingestion** - Fetch listening history from Last.fm scrobbles, Spotify recently played tracks, and Spotify playlists
+2. **Graph building** - Merge data from all sources into a unified graph with cross-source deduplication using canonical song keys
+3. **Analysis** - Compute PageRank scores, detect communities (clusters), calculate graph statistics, and find paths between songs
+
+## Key concepts
+
+### Song identity and deduplication
+
+The pipeline uses a canonical `SongKey` format to match the same song across different data sources:
+
+```typescript
+type SongKey = `${string}::${string}`; // "lowercase(artist)::lowercase(track)"
+```
+
+This ensures that "The Beatles - Hey Jude" from Last.fm and "the beatles - hey jude" from Spotify resolve to the same graph node.
+
+### Edge weights
+
+Edges represent sequential transitions between songs:
+
+- **Last.fm scrobbles**: Creates an edge if two songs were played within 1 hour of each other
+- **Spotify recent tracks**: Creates edges between consecutive plays
+- **Spotify playlists**: Creates edges between consecutive tracks in playlist order
+
+If song A is followed by song B multiple times across different sources, the edge weight accumulates. For example, if "Song A → Song B" occurs 3 times in Last.fm history and 2 times in playlists, the edge weight is 5.
+
+### Graph structure
+
+Each `GraphNode` tracks:
+
+- **Outgoing edges** (`next`) - Songs that were played after this one, with counts
+- **Incoming edges** (`previous`) - Songs that were played before this one, with counts
+- **Metadata** - Artist, album, Spotify ID, Last.fm URL, album artwork
+- **Play statistics** - Total play count, play dates, source breakdown
+- **Analysis results** - PageRank score, cluster ID (after enrichment)
+
+## Common workflows
+
+### Build a graph from multiple sources
+
+```typescript
+import { buildGraph } from "./graph/build-graph.js";
+import { fetchLastfmScrobbles } from "./ingestion/lastfm-fetcher.js";
+import { SpotifyClient } from "./ingestion/spotify-client.js";
+
+// Fetch data from sources
+const lastfmScrobbles = await fetchLastfmScrobbles(lastfmClient);
+const spotifyData = await spotifyClient.fetchAll();
+
+// Build unified graph
+const graph = buildGraph({
+  lastfmScrobbles,
+  spotifyRecentTracks: spotifyData.recentlyPlayed,
+  spotifyPlaylistTracks: spotifyData.playlistTracks,
+  lastfmUsername: "username",
+  spotifyUsername: "spotify_user"
+});
+```
+
+### Enrich with analysis
+
+```typescript
+import { enrichGraph } from "./analysis/enrich.js";
+
+const result = enrichGraph(graph, {
+  topN: 20,
+  maxTopSongsPerCluster: 5
+});
+
+// Access analysis results
+console.log(result.summary.pageRank.topSongs);
+console.log(result.summary.clusters);
+console.log(result.summary.stats);
+```
+
+### Find paths between songs
+
+```typescript
+import { shortestPath, strongestPath } from "./analysis/paths.js";
+import { toSongKey } from "./graph/types.js";
+
+const from = toSongKey("radiohead", "paranoid android");
+const to = toSongKey("muse", "citizen erased");
+
+// Fewest hops
+const shortest = shortestPath(graph, from, to);
+
+// Path with strongest connections (max-min edge weight)
+const strongest = strongestPath(graph, from, to);
+```
+
+## Data persistence
+
+The pipeline saves data at multiple stages:
+
+- **Raw ingestion** - `data/lastfm-scrobbles.json`, `data/spotify-dump.json`
+- **Checkpoints** - Resume interrupted Last.fm fetches from `data/lastfm-checkpoint.json`
+- **Enriched graph** - Export the full graph with analysis results using `exportEnrichedGraph()`
+
+## Source code structure
+
+```
+src/
+├── graph/
+│   ├── types.ts           # Core types (SongKey, GraphNode, ListeningGraph)
+│   └── build-graph.ts     # Graph construction from raw data
+├── ingestion/
+│   ├── lastfm-client.ts   # Last.fm API client
+│   ├── lastfm-fetcher.ts  # Fetch all scrobbles with pagination
+│   ├── spotify-auth.ts    # OAuth2 flow for Spotify
+│   └── spotify-client.ts  # Spotify API client
+├── analysis/
+│   ├── pagerank.ts        # Weighted PageRank algorithm
+│   ├── stats.ts           # Graph statistics and rankings
+│   ├── clusters.ts        # Community detection (Louvain method)
+│   ├── paths.ts           # BFS shortest path and strongest path
+│   └── enrich.ts          # Run all analysis and export summary
+└── config.ts              # Environment variable loading
+```
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Data ingestion" icon="download" href="/api/graph-pipeline/ingestion">
+    Fetch listening history from Last.fm and Spotify
+  </Card>
+  <Card title="Analysis functions" icon="chart-line" href="/api/graph-pipeline/analysis">
+    PageRank, clustering, statistics, and path finding
+  </Card>
+  <Card title="Core types" icon="code" href="/api/graph-pipeline/types">
+    TypeScript interfaces for graph nodes and data structures
+  </Card>
+</CardGroup>

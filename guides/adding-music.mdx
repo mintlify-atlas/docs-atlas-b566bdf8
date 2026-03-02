@@ -1,0 +1,291 @@
+---
+title: Adding music from different sources
+description: Learn how to import your listening history from Last.fm and Spotify to build your personal music graph
+---
+
+Rotations builds your personal music graph by importing listening history from multiple sources. This guide covers how to add music from Last.fm scrobbles, Spotify recently played tracks, and Spotify playlists.
+
+## Overview
+
+Rotations supports three main data sources:
+
+- **Last.fm scrobbles** - Your complete listening history from Last.fm
+- **Spotify recently played** - Your last 50 played tracks from Spotify
+- **Spotify playlists** - All your playlists with track ordering preserved
+
+Each source contributes to building the listening graph by creating nodes (songs) and edges (transitions between songs).
+
+## Adding Last.fm scrobbles
+
+Last.fm provides your complete listening history through their scrobbles API. This is typically the richest data source for building your music graph.
+
+### Prerequisites
+
+You need a Last.fm API key and your username.
+
+<Steps>
+  <Step title="Get a Last.fm API key">
+    Visit [https://www.last.fm/api/account/create](https://www.last.fm/api/account/create) and create a new API application. You'll receive an API key instantly.
+  </Step>
+
+  <Step title="Configure your environment">
+    Add your credentials to your `.env` file:
+
+    ```bash .env
+    LASTFM_API_KEY=your_api_key_here
+    LASTFM_USERNAME=your_lastfm_username
+    ```
+  </Step>
+
+  <Step title="Fetch your scrobbles">
+    Run the ingestion script to download your complete scrobble history:
+
+    ```bash
+    cd graph-pipeline
+    npm run fetch-lastfm
+    ```
+
+    This will:
+    - Paginate through your entire listening history (200 tracks per page)
+    - Save scrobbles to `data/lastfm-scrobbles.json`
+    - Create checkpoints every 10 pages for resume support
+    - Apply rate limiting (1 request per second) to stay within API limits
+  </Step>
+</Steps>
+
+### Resume support
+
+If the fetch is interrupted, the script automatically resumes from the last checkpoint:
+
+```bash
+# Fetch will resume from checkpoint if available
+npm run fetch-lastfm
+
+# Force a full refresh (ignore checkpoint)
+npm run fetch-lastfm -- --full-refresh
+```
+
+<Info>
+  Checkpoints are saved to `data/lastfm-checkpoint.json` and include the last fetched timestamp and scrobble count.
+</Info>
+
+### Data format
+
+Each scrobble includes:
+
+```typescript
+interface RawScrobble {
+  artist: string
+  track: string
+  album: string
+  timestamp: number // Unix timestamp in seconds
+  imageUrl?: string // Album artwork from Last.fm
+}
+```
+
+## Adding Spotify data
+
+Spotify provides two data sources: recently played tracks and playlist contents.
+
+### Prerequisites
+
+You need a Spotify Developer account and an app with OAuth credentials.
+
+<Steps>
+  <Step title="Create a Spotify app">
+    1. Go to [https://developer.spotify.com/dashboard](https://developer.spotify.com/dashboard)
+    2. Click "Create app"
+    3. Fill in the app name and description
+    4. Add `http://localhost:8888/callback` as a redirect URI
+    5. Save your Client ID and Client Secret
+  </Step>
+
+  <Step title="Configure your environment">
+    Add your Spotify credentials to `.env`:
+
+    ```bash .env
+    SPOTIFY_CLIENT_ID=your_client_id
+    SPOTIFY_CLIENT_SECRET=your_client_secret
+    SPOTIFY_REDIRECT_PORT=8888
+    ```
+  </Step>
+
+  <Step title="Authorize your app">
+    Run the authorization flow to get access tokens:
+
+    ```bash
+    cd graph-pipeline
+    npm run auth-spotify
+    ```
+
+    This will:
+    - Start a local HTTP server on port 8888
+    - Open your browser to Spotify's authorization page
+    - Request required scopes: `user-read-recently-played`, `playlist-read-private`, `playlist-read-collaborative`
+    - Save tokens to `.spotify-tokens.json`
+  </Step>
+
+  <Step title="Fetch Spotify data">
+    Once authorized, fetch your Spotify data:
+
+    ```bash
+    npm run fetch-spotify
+    ```
+
+    This will:
+    - Fetch your last 50 recently played tracks
+    - Fetch all your playlists (paginated, 50 per page)
+    - Fetch all tracks from each playlist (paginated, 100 per page)
+    - Save data to `data/spotify-data.json`
+  </Step>
+</Steps>
+
+### Authentication details
+
+The OAuth flow automatically handles:
+
+- **Token refresh** - Access tokens are refreshed automatically when they expire
+- **Token storage** - Tokens are saved to `.spotify-tokens.json` for reuse
+- **Browser opening** - The authorization URL opens automatically (or displays for manual copy)
+
+<Warning>
+  Keep your `.spotify-tokens.json` file secure. It contains refresh tokens that grant ongoing access to your Spotify account.
+</Warning>
+
+### Recently played tracks
+
+Spotify's recently played endpoint returns your last 50 tracks with exact play timestamps:
+
+```typescript
+interface RawSpotifyRecentTrack {
+  spotifyId: string // Track ID for lookups
+  artist: string
+  track: string
+  album: string
+  playedAt: string // ISO 8601 timestamp
+  imageUrl?: string // Album artwork from Spotify
+}
+```
+
+### Playlist tracks
+
+Playlist tracks preserve ordering and include playlist metadata:
+
+```typescript
+interface RawSpotifyPlaylistTrack {
+  spotifyId: string
+  artist: string
+  track: string
+  album: string
+  playlistId: string // Unique playlist identifier
+  playlistName: string
+  position: number // Zero-based position in playlist
+  imageUrl?: string
+}
+```
+
+## How sources combine
+
+Rotations merges all data sources into a unified graph:
+
+1. **Song matching** - Songs are matched across sources using `lowercase(artist)::lowercase(track)` as a canonical key
+2. **Edge creation** - Sequential tracks create directed edges (A → B means A was played before B)
+3. **Weight accumulation** - Multiple transitions between the same songs increase edge weight
+4. **Metadata enrichment** - Spotify IDs, artwork, and album names are preserved from any source
+
+<Accordion title="Example: Multi-source track">
+  If you scrobbled "Radiohead - Paranoid Android" 10 times on Last.fm and it appears in 3 Spotify playlists:
+
+  ```json
+  {
+    "radiohead::paranoid android": {
+      "name": "Paranoid Android",
+      "artists": ["Radiohead"],
+      "totalPlays": 13,
+      "sources": ["lastfm", "spotify-playlist"],
+      "imageUrl": "https://...",
+      "spotifyId": "6LgJvl0Xdtc73RJ1mmpotq"
+    }
+  }
+  ```
+</Accordion>
+
+## Building the graph
+
+Once you've fetched data from your sources, build the unified graph:
+
+```bash
+cd graph-pipeline
+npm run build-graph
+```
+
+This processes all data sources and:
+- Creates nodes for each unique song
+- Creates edges from sequential listens (within 1 hour for scrobbles)
+- Creates edges from playlist ordering
+- Computes PageRank scores
+- Exports to `data/listening-graph.json`
+
+<Info>
+  The graph builder automatically detects which data sources are available and processes only those with data files present.
+</Info>
+
+## Edge creation rules
+
+### From scrobbles (Last.fm and Spotify recent)
+
+Tracks are connected if played sequentially with **less than 1 hour** between them:
+
+```typescript
+// If timestamp difference <= 3600 seconds, create edge
+if (timestamps[i + 1] - timestamps[i] <= 3600) {
+  addEdge(songA, songB)
+}
+```
+
+This prevents creating edges across different listening sessions.
+
+### From playlists
+
+All consecutive tracks in a playlist are connected regardless of whether you've played them:
+
+```typescript
+// Playlist order creates edges
+for (let i = 0; i < playlist.length - 1; i++) {
+  addEdge(playlist[i], playlist[i + 1])
+}
+```
+
+This captures your intentional curation and adds pathways you might explore.
+
+## Handling edge cases
+
+<Accordion title="Missing or invalid tracks">
+  The graph builder skips tracks with:
+  - Empty artist or track name
+  - "Now playing" status (Last.fm)
+  - Null track references (Spotify)
+  - Podcast episodes (Spotify)
+  - Local files without metadata
+</Accordion>
+
+<Accordion title="Duplicate scrobbles">
+  Duplicates are detected using `artist::track::timestamp` keys and automatically deduplicated during graph construction.
+</Accordion>
+
+<Accordion title="Rate limiting">
+  - **Last.fm**: 1 request per second (configurable in code)
+  - **Spotify**: Automatic retry with exponential backoff on 429 responses
+  - **Checkpoint recovery**: Resume from last successful page if interrupted
+</Accordion>
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Managing rotations" icon="list" href="/guides/managing-rotations">
+    Learn how to create and manage music rotations
+  </Card>
+  <Card title="Graph visualization" icon="chart-network" href="/guides/graph-visualization">
+    Explore your music graph visually
+  </Card>
+</CardGroup>

@@ -1,0 +1,383 @@
+---
+title: Creating and managing rotations
+description: Build custom music rotations from your listening graph using playlists and graph analysis
+---
+
+Rotations are curated collections of songs that define your current listening focus. This guide covers how to create, manage, and optimize your rotations using your listening graph.
+
+## What are rotations?
+
+A rotation is a dynamic playlist built from your listening graph. Unlike traditional playlists, rotations leverage graph connections to create cohesive listening experiences based on:
+
+- **Listening patterns** - Songs you naturally listen to in sequence
+- **Graph connectivity** - Highly connected clusters of related tracks
+- **PageRank scores** - Songs that are central to your listening habits
+- **Temporal patterns** - Songs you listen to during specific time periods
+
+## Creating a rotation
+
+You can create rotations through multiple approaches depending on your needs.
+
+### From Spotify playlists
+
+Import your existing Spotify playlists as a starting point:
+
+<Steps>
+  <Step title="Fetch your playlists">
+    Ensure you've already fetched your Spotify data:
+
+    ```bash
+    cd graph-pipeline
+    npm run fetch-spotify
+    ```
+  </Step>
+
+  <Step title="View available playlists">
+    List all playlists found in your Spotify data:
+
+    ```bash
+    npm run list-playlists
+    ```
+
+    This shows playlist names, track counts, and IDs.
+  </Step>
+
+  <Step title="Convert to rotation">
+    Import a playlist as a rotation:
+
+    ```bash
+    npm run create-rotation -- --from-playlist "playlist-id"
+    ```
+
+    The rotation will include all tracks from the playlist plus their immediate neighbors in the graph.
+  </Step>
+</Steps>
+
+### From graph clusters
+
+Create rotations from densely connected regions of your listening graph:
+
+<Steps>
+  <Step title="Detect clusters">
+    Run cluster analysis on your graph:
+
+    ```bash
+    cd graph-pipeline
+    npm run analyze-clusters
+    ```
+
+    This uses Louvain community detection to find natural groupings of songs.
+  </Step>
+
+  <Step title="Inspect cluster contents">
+    View songs in each cluster:
+
+    ```bash
+    npm run show-cluster -- --id 0
+    ```
+
+    This displays:
+    - Cluster size and density
+    - Top songs by PageRank
+    - Representative artists
+    - Average play count
+  </Step>
+
+  <Step title="Create rotation from cluster">
+    Convert a cluster to a rotation:
+
+    ```bash
+    npm run create-rotation -- --from-cluster 0
+    ```
+  </Step>
+</Steps>
+
+### From high PageRank songs
+
+Build a rotation around your most central songs:
+
+```bash
+cd graph-pipeline
+npm run create-rotation -- --top-pagerank 50
+```
+
+This creates a rotation with:
+- The 50 highest PageRank songs
+- Their most common neighbors (songs frequently played before/after)
+- Ordered by graph connectivity
+
+<Info>
+  PageRank identifies songs that are frequently transitioned to from many other songs, making them natural anchors for rotations.
+</Info>
+
+### Manual curation
+
+Create a rotation from specific song keys:
+
+```bash
+npm run create-rotation -- --songs "radiohead::paranoid android,bjork::hyperballad,aphex twin::windowlicker"
+```
+
+The system will:
+1. Add the specified songs
+2. Find their strongest connections in the graph
+3. Suggest related songs to complete the rotation
+
+## Rotation configuration
+
+Configure rotation behavior in your `.env` file:
+
+```bash .env
+# Rotation settings
+ROTATION_SIZE=50 # Target number of songs
+ROTATION_RADIUS=2 # How many graph hops to explore
+MIN_EDGE_WEIGHT=2 # Minimum connection strength
+INCLUDE_RECOMMENDATIONS=true # Add graph-based suggestions
+```
+
+### Radius control
+
+The radius determines how far to explore from seed songs:
+
+- **Radius 1** - Only direct neighbors (songs played immediately before/after)
+- **Radius 2** - Neighbors and their neighbors (2 hops away)
+- **Radius 3+** - Broader exploration, may include loosely related songs
+
+<Accordion title="Example: Radius exploration">
+  Starting with "Radiohead - Karma Police":
+
+  **Radius 1:**
+  - Radiohead - Paranoid Android
+  - Radiohead - No Surprises
+  - Portishead - Glory Box
+
+  **Radius 2:**
+  - Radiohead - Exit Music
+  - Massive Attack - Teardrop
+  - Portishead - Sour Times
+  - Bjork - Joga
+
+  **Radius 3:**
+  - Everything above plus loosely connected tracks
+</Accordion>
+
+## Managing rotations
+
+### Listing rotations
+
+View all saved rotations:
+
+```bash
+npm run list-rotations
+```
+
+Outputs:
+- Rotation name
+- Song count
+- Creation date
+- Source type (playlist, cluster, manual, etc.)
+
+### Updating rotations
+
+Rotations can be updated as your graph evolves:
+
+```bash
+# Refresh a rotation with current graph data
+npm run update-rotation -- --name "My Rotation" --refresh
+
+# Expand a rotation with more neighbors
+npm run update-rotation -- --name "My Rotation" --expand
+
+# Trim to top N songs by PageRank
+npm run update-rotation -- --name "My Rotation" --trim 30
+```
+
+### Exporting rotations
+
+Export rotations for use in other applications:
+
+<CodeGroup>
+
+```bash Spotify
+# Export as Spotify playlist
+npm run export-rotation -- --name "My Rotation" --to spotify
+```
+
+```bash JSON
+# Export as JSON
+npm run export-rotation -- --name "My Rotation" --format json
+```
+
+```bash M3U
+# Export as M3U playlist
+npm run export-rotation -- --name "My Rotation" --format m3u
+```
+
+</CodeGroup>
+
+<Warning>
+  Exporting to Spotify requires an active Spotify authorization. Run `npm run auth-spotify` first if needed.
+</Warning>
+
+## Multi-rotation mode
+
+Manage multiple rotations for different listening contexts:
+
+### Creating rotation sets
+
+```bash
+# Create a set of thematic rotations
+npm run create-rotation-set -- \
+  --themes "focus,workout,chill,discovery"
+```
+
+This analyzes your graph to create:
+- **Focus** - High-energy, minimal vocals, consistent BPM
+- **Workout** - Fast tempo, high energy
+- **Chill** - Lower energy, slower tempo
+- **Discovery** - Low play count, high PageRank
+
+<Info>
+  Theme detection uses a combination of audio features (when available) and graph analysis patterns.
+</Info>
+
+### Switching between rotations
+
+```bash
+# Set active rotation
+npm run set-active-rotation -- --name "Focus"
+
+# Get current rotation
+npm run get-active-rotation
+```
+
+### Rotation scheduling
+
+Automate rotation changes based on time:
+
+```bash .env
+# Rotation schedule (cron-like)
+ROTATION_SCHEDULE_WEEKDAY_MORNING="Focus"
+ROTATION_SCHEDULE_WEEKDAY_AFTERNOON="Discovery"
+ROTATION_SCHEDULE_EVENING="Chill"
+ROTATION_SCHEDULE_WEEKEND="All"
+```
+
+## Advanced rotation techniques
+
+### Path-based rotations
+
+Create a rotation following a specific path through your graph:
+
+```bash
+npm run create-rotation -- \
+  --path-from "radiohead::paranoid android" \
+  --path-to "aphex twin::avril 14th" \
+  --max-length 20
+```
+
+This finds the strongest path between two songs and builds a rotation around it.
+
+<Accordion title="How path finding works">
+  The system uses weighted shortest path algorithm:
+
+  1. Convert edge weights to costs (higher weight = lower cost)
+  2. Run Dijkstra's algorithm from source to target
+  3. Extract the path and surrounding high-connectivity nodes
+  4. Order the rotation to follow the path naturally
+</Accordion>
+
+### Temporal rotations
+
+Create rotations based on when you listen:
+
+```bash
+# Songs listened to most during specific hours
+npm run create-rotation -- --time-filter "22:00-02:00" --min-plays 3
+
+# Songs from specific date range
+npm run create-rotation -- --date-range "2024-01-01,2024-03-31"
+```
+
+### Diversity control
+
+Adjust artist diversity in rotations:
+
+```bash
+# Limit songs per artist
+npm run create-rotation -- \
+  --from-cluster 0 \
+  --max-per-artist 3
+
+# Force minimum artist count
+npm run create-rotation -- \
+  --top-pagerank 50 \
+  --min-artists 15
+```
+
+## Rotation analysis
+
+Analyze rotation quality and characteristics:
+
+```bash
+npm run analyze-rotation -- --name "My Rotation"
+```
+
+Outputs:
+- **Connectivity score** - How well songs connect to each other
+- **Diversity metrics** - Artist variety, genre spread
+- **PageRank distribution** - Balance of central vs. peripheral songs
+- **Temporal patterns** - When these songs are typically played
+- **Suggested additions** - Songs that would improve connectivity
+
+### Quality metrics
+
+<Accordion title="Understanding connectivity score">
+  Connectivity score (0-100) measures how cohesive a rotation is:
+
+  - **90-100**: Extremely cohesive, songs have strong connections
+  - **70-89**: Well-connected, flows naturally
+  - **50-69**: Moderate cohesion, some weak connections
+  - **Below 50**: Loosely connected, may feel disjointed
+
+  Score calculation:
+  ```typescript
+  const avgEdgeWeight = totalWeight / edgeCount
+  const connectedPairs = countConnectedPairs(songs)
+  const possiblePairs = (n * (n - 1)) / 2
+  const score = (connectedPairs / possiblePairs) * avgEdgeWeight
+  ```
+</Accordion>
+
+## Automatic rotation updates
+
+Keep rotations fresh as you add new listening data:
+
+```bash
+# Enable auto-update
+npm run config -- --auto-update-rotations true
+
+# Set update frequency
+npm run config -- --update-frequency "weekly"
+```
+
+When enabled, rotations automatically:
+1. Incorporate new listening data after graph rebuilds
+2. Add newly discovered high-connectivity songs
+3. Remove songs that fall below minimum edge weight
+4. Recompute ordering based on updated PageRank
+
+<Tip>
+  Enable auto-update for discovery-focused rotations, but keep manually curated rotations static.
+</Tip>
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Graph visualization" icon="chart-network" href="/guides/graph-visualization">
+    Visualize your rotations in the music graph
+  </Card>
+  <Card title="Spotify integration" icon="spotify" href="/guides/spotify-integration">
+    Export rotations back to Spotify
+  </Card>
+</CardGroup>

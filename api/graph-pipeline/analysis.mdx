@@ -1,0 +1,521 @@
+---
+title: Analysis functions
+description: PageRank, clustering, statistics, and path finding for listening graphs
+---
+
+The analysis layer provides algorithms for extracting insights from the listening graph.
+
+## PageRank
+
+### computePageRank
+
+Run weighted PageRank on a listening graph. Mutates the graph in place by setting the `pageRank` field on each node.
+
+```typescript
+import { computePageRank } from "./analysis/pagerank.js";
+
+const result = computePageRank(graph, options?);
+```
+
+<ParamField path="graph" type="ListeningGraph" required>
+  The listening graph to analyze (mutated in place).
+</ParamField>
+
+<ParamField path="options" type="PageRankOptions" optional>
+  Algorithm configuration options.
+
+  <Expandable title="properties">
+    <ParamField path="dampingFactor" type="number" optional>
+      Probability of following a link vs. random jump. Defaults to `0.85`.
+    </ParamField>
+    <ParamField path="convergenceThreshold" type="number" optional>
+      Stop when max rank change between iterations is below this. Defaults to `0.0001`.
+    </ParamField>
+    <ParamField path="maxIterations" type="number" optional>
+      Maximum number of iterations. Defaults to `100`.
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<ResponseField name="result" type="PageRankResult">
+  Metadata about the PageRank computation.
+
+  <Expandable title="properties">
+    <ResponseField name="iterations" type="number">
+      Number of iterations until convergence (or max)
+    </ResponseField>
+    <ResponseField name="converged" type="boolean">
+      Whether the algorithm converged before hitting `maxIterations`
+    </ResponseField>
+    <ResponseField name="maxDelta" type="number">
+      Maximum rank change in the final iteration
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+#### Algorithm details
+
+The implementation follows the standard PageRank algorithm with modifications for weighted edges:
+
+1. Initialize all nodes with rank `1/N`
+2. For each iteration:
+   - Dangling nodes (no outgoing edges) distribute their rank evenly to all nodes
+   - Each node distributes rank to neighbors **proportional to edge weight**
+   - Apply damping: `rank = (1-d)/N + d * (incoming rank)`
+3. Stop when converged or max iterations reached
+
+Edge weights are normalized by the sum of outgoing weights, so a node with `next = {"song1": 5, "song2": 3}` sends 5/8 of its distributable rank to song1 and 3/8 to song2.
+
+### getTopByPageRank
+
+Get the top N nodes by PageRank score. Assumes `computePageRank()` has been called.
+
+```typescript
+import { getTopByPageRank } from "./analysis/pagerank.js";
+
+const top = getTopByPageRank(graph, n?);
+```
+
+<ParamField path="graph" type="ListeningGraph" required>
+  The listening graph with PageRank scores computed.
+</ParamField>
+
+<ParamField path="n" type="number" optional>
+  Number of top songs to return. Defaults to `20`.
+</ParamField>
+
+<ResponseField name="top" type="Array<TopSong>">
+  Top songs sorted by PageRank score (descending).
+
+  <Expandable title="TopSong properties">
+    <ResponseField name="songKey" type="SongKey">
+      Canonical song identifier
+    </ResponseField>
+    <ResponseField name="name" type="string">
+      Track name
+    </ResponseField>
+    <ResponseField name="artists" type="string[]">
+      Artist names
+    </ResponseField>
+    <ResponseField name="pageRank" type="number">
+      PageRank score
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+## Statistics
+
+### computeStats
+
+Compute comprehensive statistics for a listening graph: per-node metrics, graph-level stats, and top-N rankings.
+
+```typescript
+import { computeStats } from "./analysis/stats.js";
+
+const result = computeStats(graph, topN?);
+```
+
+<ParamField path="graph" type="ListeningGraph" required>
+  The listening graph to analyze.
+</ParamField>
+
+<ParamField path="topN" type="number" optional>
+  Number of entries in each ranking list. Defaults to `10`.
+</ParamField>
+
+<ResponseField name="result" type="StatsResult">
+  Complete statistics output.
+
+  <Expandable title="properties">
+    <ResponseField name="graphStats" type="GraphStats">
+      Graph-level summary statistics.
+
+      <Expandable title="GraphStats properties">
+        <ResponseField name="totalNodes" type="number">
+          Total number of songs in the graph
+        </ResponseField>
+        <ResponseField name="totalEdges" type="number">
+          Total number of directed edges
+        </ResponseField>
+        <ResponseField name="totalScrobbles" type="number">
+          Total play count across all sources
+        </ResponseField>
+        <ResponseField name="dateRange" type="{ from: string; to: string }">
+          ISO 8601 date range of listening history
+        </ResponseField>
+        <ResponseField name="sourceBreakdown" type="Record<ListeningSource, number>">
+          Play counts per source ("lastfm", "spotify-recent", "spotify-playlist")
+        </ResponseField>
+        <ResponseField name="averageDegree" type="number">
+          Average node degree (in + out edges)
+        </ResponseField>
+        <ResponseField name="medianDegree" type="number">
+          Median node degree
+        </ResponseField>
+      </Expandable>
+    </ResponseField>
+    <ResponseField name="rankings" type="Rankings">
+      Top-N lists for various metrics.
+
+      <Expandable title="Rankings properties">
+        <ResponseField name="mostPlayed" type="NodeStats[]">
+          Top songs by total play count
+        </ResponseField>
+        <ResponseField name="mostConnected" type="NodeStats[]">
+          Top songs by total degree (in + out)
+        </ResponseField>
+        <ResponseField name="highestInDegree" type="NodeStats[]">
+          Top songs by incoming edge count
+        </ResponseField>
+        <ResponseField name="highestOutDegree" type="NodeStats[]">
+          Top songs by outgoing edge count
+        </ResponseField>
+      </Expandable>
+    </ResponseField>
+    <ResponseField name="nodeStats" type="Map<SongKey, NodeStats>">
+      Per-node statistics for every song in the graph.
+
+      <Expandable title="NodeStats properties">
+        <ResponseField name="songKey" type="SongKey">
+          Canonical song identifier
+        </ResponseField>
+        <ResponseField name="name" type="string">
+          Track name
+        </ResponseField>
+        <ResponseField name="artists" type="string[]">
+          Artist names
+        </ResponseField>
+        <ResponseField name="totalPlays" type="number">
+          Total play count
+        </ResponseField>
+        <ResponseField name="inDegree" type="number">
+          Number of unique incoming edges
+        </ResponseField>
+        <ResponseField name="outDegree" type="number">
+          Number of unique outgoing edges
+        </ResponseField>
+        <ResponseField name="weightedInDegree" type="number">
+          Sum of all incoming edge weights
+        </ResponseField>
+        <ResponseField name="weightedOutDegree" type="number">
+          Sum of all outgoing edge weights
+        </ResponseField>
+        <ResponseField name="totalDegree" type="number">
+          inDegree + outDegree
+        </ResponseField>
+      </Expandable>
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+## Clustering
+
+### detectClusters
+
+Detect communities in the listening graph using the Louvain method. Mutates the graph in place by setting the `clusterId` field on each node.
+
+```typescript
+import { detectClusters } from "./analysis/clusters.js";
+
+const result = detectClusters(graph, maxTopSongs?);
+```
+
+<ParamField path="graph" type="ListeningGraph" required>
+  The listening graph to analyze (mutated in place).
+</ParamField>
+
+<ParamField path="maxTopSongs" type="number" optional>
+  Number of top songs to include in each cluster's summary. Defaults to `5`.
+</ParamField>
+
+<ResponseField name="result" type="ClusterResult">
+  Community detection results.
+
+  <Expandable title="properties">
+    <ResponseField name="clusterCount" type="number">
+      Total number of detected clusters
+    </ResponseField>
+    <ResponseField name="modularity" type="number">
+      Modularity score (quality metric for the clustering, ranges from -0.5 to 1.0)
+    </ResponseField>
+    <ResponseField name="clusters" type="ClusterStats[]">
+      Per-cluster statistics.
+
+      <Expandable title="ClusterStats properties">
+        <ResponseField name="clusterId" type="number">
+          Cluster identifier (0-indexed)
+        </ResponseField>
+        <ResponseField name="size" type="number">
+          Number of songs in this cluster
+        </ResponseField>
+        <ResponseField name="topSongs" type="Array<TopClusterSong>">
+          Top songs in this cluster by play count.
+
+          <Expandable title="TopClusterSong properties">
+            <ResponseField name="songKey" type="SongKey">
+              Canonical song identifier
+            </ResponseField>
+            <ResponseField name="name" type="string">
+              Track name
+            </ResponseField>
+            <ResponseField name="artists" type="string[]">
+              Artist names
+            </ResponseField>
+            <ResponseField name="totalPlays" type="number">
+              Total play count
+            </ResponseField>
+          </Expandable>
+        </ResponseField>
+        <ResponseField name="interClusterEdges" type="number">
+          Number of edges from this cluster to other clusters
+        </ResponseField>
+      </Expandable>
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+#### Algorithm details
+
+The implementation uses the Louvain method for community detection:
+
+1. Treat edges as **undirected** (sum of `next` + `previous` weights) since community structure is about mutual affinity
+2. **Phase 1 (Local)**: Move each node to the neighboring community that gives the best modularity gain
+3. Repeat until no more improvements can be made
+4. Renumber communities to be contiguous (0, 1, 2, ...)
+
+Modularity is computed using the formula: `Q = Σ_c [L_c/m − (d_c/(2m))²]` where `L_c` is the sum of edge weights within community c and `d_c` is the sum of degrees of nodes in c.
+
+## Path finding
+
+### shortestPath
+
+Find the shortest path (fewest hops) between two songs using BFS. Follows directed edges.
+
+```typescript
+import { shortestPath } from "./analysis/paths.js";
+import { toSongKey } from "./graph/types.js";
+
+const from = toSongKey("radiohead", "paranoid android");
+const to = toSongKey("muse", "citizen erased");
+const result = shortestPath(graph, from, to);
+```
+
+<ParamField path="graph" type="ListeningGraph" required>
+  The listening graph to search.
+</ParamField>
+
+<ParamField path="from" type="SongKey" required>
+  Starting song key.
+</ParamField>
+
+<ParamField path="to" type="SongKey" required>
+  Destination song key.
+</ParamField>
+
+<ResponseField name="result" type="PathResult">
+  Path search result.
+
+  <Expandable title="properties">
+    <ResponseField name="found" type="boolean">
+      Whether a path was found
+    </ResponseField>
+    <ResponseField name="algorithm" type="'shortest' | 'strongest'">
+      Algorithm used ("shortest" for this function)
+    </ResponseField>
+    <ResponseField name="path" type="PathStep[]">
+      Ordered list of nodes from start to end.
+
+      <Expandable title="PathStep properties">
+        <ResponseField name="songKey" type="SongKey">
+          Canonical song identifier
+        </ResponseField>
+        <ResponseField name="name" type="string">
+          Track name
+        </ResponseField>
+        <ResponseField name="artists" type="string[]">
+          Artist names
+        </ResponseField>
+        <ResponseField name="edgeWeight" type="number" optional>
+          Edge weight from this node to the next (undefined for the last node)
+        </ResponseField>
+      </Expandable>
+    </ResponseField>
+    <ResponseField name="hops" type="number">
+      Number of edges in the path (path.length - 1)
+    </ResponseField>
+    <ResponseField name="totalWeight" type="number">
+      Sum of edge weights along the path
+    </ResponseField>
+    <ResponseField name="minEdgeWeight" type="number">
+      Minimum edge weight along the path
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+### strongestPath
+
+Find the "strongest" path between two songs — the path that maximizes the minimum edge weight (bottleneck/widest path). Uses a modified Dijkstra algorithm with a max-priority queue on the minimum edge weight. Follows directed edges.
+
+```typescript
+import { strongestPath } from "./analysis/paths.js";
+
+const result = strongestPath(graph, from, to);
+```
+
+<ParamField path="graph" type="ListeningGraph" required>
+  The listening graph to search.
+</ParamField>
+
+<ParamField path="from" type="SongKey" required>
+  Starting song key.
+</ParamField>
+
+<ParamField path="to" type="SongKey" required>
+  Destination song key.
+</ParamField>
+
+<ResponseField name="result" type="PathResult">
+  Path search result (same structure as `shortestPath`, with `algorithm = "strongest"`).
+</ResponseField>
+
+#### When to use which algorithm
+
+- **shortestPath**: Find the most direct route between songs (fewest transitions)
+- **strongestPath**: Find the route with the strongest connections (most frequently played sequences)
+
+For example, if song A → B → C has edge weights [1, 10] and A → D → C has weights [8, 9], shortestPath returns A → B → C (2 hops), while strongestPath returns A → D → C (min edge weight 8 vs 1).
+
+## Enrichment
+
+### enrichGraph
+
+Run all analysis algorithms on a listening graph and return a summary. Mutates the graph in place by setting `pageRank` and `clusterId` on each node.
+
+```typescript
+import { enrichGraph } from "./analysis/enrich.js";
+
+const result = enrichGraph(graph, options?);
+```
+
+<ParamField path="graph" type="ListeningGraph" required>
+  The listening graph to analyze (mutated in place).
+</ParamField>
+
+<ParamField path="options" type="object" optional>
+  Analysis options.
+
+  <Expandable title="properties">
+    <ParamField path="topN" type="number" optional>
+      Number of entries in rankings. Defaults to `20`.
+    </ParamField>
+    <ParamField path="maxTopSongsPerCluster" type="number" optional>
+      Number of top songs per cluster. Defaults to `5`.
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<ResponseField name="result" type="EnrichResult">
+  Enriched graph and analysis summary.
+
+  <Expandable title="properties">
+    <ResponseField name="graph" type="ListeningGraph">
+      The input graph (mutated with PageRank and cluster IDs)
+    </ResponseField>
+    <ResponseField name="summary" type="AnalysisSummary">
+      Consolidated analysis results.
+
+      <Expandable title="AnalysisSummary properties">
+        <ResponseField name="pageRank" type="PageRankResult & { topSongs }">
+          PageRank metadata and top songs
+        </ResponseField>
+        <ResponseField name="stats" type="GraphStats">
+          Graph-level statistics
+        </ResponseField>
+        <ResponseField name="rankings" type="Rankings">
+          Top-N lists for various metrics
+        </ResponseField>
+        <ResponseField name="clusters" type="ClusterResult">
+          Community detection results
+        </ResponseField>
+      </Expandable>
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+### exportEnrichedGraph
+
+Export an enriched graph and its analysis summary to a JSON file.
+
+```typescript
+import { exportEnrichedGraph } from "./analysis/enrich.js";
+
+await exportEnrichedGraph(result, outputPath);
+```
+
+<ParamField path="result" type="EnrichResult" required>
+  The enriched graph result from `enrichGraph()`.
+</ParamField>
+
+<ParamField path="outputPath" type="string" required>
+  Path to write the JSON file.
+</ParamField>
+
+## Example: Complete analysis workflow
+
+```typescript
+import { buildGraph } from "./graph/build-graph.js";
+import { enrichGraph, exportEnrichedGraph } from "./analysis/enrich.js";
+import { shortestPath, strongestPath } from "./analysis/paths.js";
+import { toSongKey } from "./graph/types.js";
+
+// Build graph from ingested data
+const graph = buildGraph({
+  lastfmScrobbles,
+  spotifyRecentTracks: spotifyDump.recentlyPlayed,
+  spotifyPlaylistTracks: spotifyDump.playlistTracks
+});
+
+// Run all analysis
+const result = enrichGraph(graph, {
+  topN: 20,
+  maxTopSongsPerCluster: 5
+});
+
+// Print summary
+console.log("Top songs by PageRank:");
+result.summary.pageRank.topSongs.forEach((s, i) => {
+  console.log(`  ${i + 1}. ${s.artists.join(", ")} - ${s.name} (${s.pageRank.toFixed(4)})`);
+});
+
+console.log(`\nDetected ${result.summary.clusters.clusterCount} clusters`);
+console.log(`Modularity: ${result.summary.clusters.modularity.toFixed(3)}`);
+
+console.log("\nGraph statistics:");
+console.log(`  ${result.summary.stats.totalNodes} songs`);
+console.log(`  ${result.summary.stats.totalEdges} edges`);
+console.log(`  ${result.summary.stats.totalScrobbles} total plays`);
+
+// Find paths
+const from = toSongKey("radiohead", "paranoid android");
+const to = toSongKey("muse", "citizen erased");
+
+const shortest = shortestPath(graph, from, to);
+if (shortest.found) {
+  console.log(`\nShortest path (${shortest.hops} hops):`);
+  shortest.path.forEach((step, i) => {
+    console.log(`  ${i + 1}. ${step.artists.join(", ")} - ${step.name}`);
+  });
+}
+
+const strongest = strongestPath(graph, from, to);
+if (strongest.found) {
+  console.log(`\nStrongest path (min weight ${strongest.minEdgeWeight}):`);
+  strongest.path.forEach((step, i) => {
+    const weight = step.edgeWeight ? ` [weight: ${step.edgeWeight}]` : "";
+    console.log(`  ${i + 1}. ${step.artists.join(", ")} - ${step.name}${weight}`);
+  });
+}
+
+// Export to file
+await exportEnrichedGraph(result, "./data/enriched-graph.json");
+```

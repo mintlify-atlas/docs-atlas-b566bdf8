@@ -1,0 +1,351 @@
+---
+title: Types
+description: TypeScript types and interfaces for the music library system
+---
+
+Rotations uses strongly-typed IDs and interfaces to ensure type safety across playlists, tracks, and player state.
+
+## ID types
+
+### PlaylistId
+
+String literal type for playlist IDs with source-prefixed format.
+
+```typescript
+type PlaylistId = `play-${string}`
+```
+
+**Format:** `play-{source}-{id}`
+
+**Examples:**
+- `play-spotify-37i9dQZF1DXcBWIGoYBM5M`
+- `play-youtube-PLrAXtmErZgOeiKm4sgNOknGvNjby9efdf`
+- `play-bandcamp-album-123456789`
+
+### TrackId
+
+String literal type for track IDs with source-prefixed format.
+
+```typescript
+type TrackId = `track-${string}`
+```
+
+**Format:** `track-{source}-{id}`
+
+**Examples:**
+- `track-spotify-6rqhFgbbKwnb9MLmUQDhG6`
+- `track-youtube-dQw4w9WgXcQ`
+- `track-bandcamp-1234567890`
+
+### PlaylistSource
+
+Supported music streaming platforms.
+
+```typescript
+type PlaylistSource = "spotify" | "youtube" | "bandcamp"
+```
+
+## Core types
+
+### FuckingPlaylist
+
+Represents a music playlist from any supported source.
+
+```typescript
+interface FuckingPlaylist {
+  id: PlaylistId
+  track_cover_uri: string
+  name: string
+  artists: string[]
+  first_track: FuckingTrack
+  totalDurationMs: number
+  source: PlaylistSource | null
+}
+```
+
+<ResponseField name="id" type="PlaylistId" required>
+  Unique playlist identifier with source prefix
+</ResponseField>
+
+<ResponseField name="track_cover_uri" type="string" required>
+  URL to the playlist cover image
+</ResponseField>
+
+<ResponseField name="name" type="string" required>
+  Display name of the playlist
+</ResponseField>
+
+<ResponseField name="artists" type="string[]" required>
+  Array of artist names associated with the playlist
+</ResponseField>
+
+<ResponseField name="first_track" type="FuckingTrack" required>
+  The first track in the playlist (used as entry point)
+</ResponseField>
+
+<ResponseField name="totalDurationMs" type="number" required>
+  Total duration of all tracks in milliseconds
+</ResponseField>
+
+<ResponseField name="source" type="PlaylistSource | null" required>
+  The platform this playlist originated from
+</ResponseField>
+
+**Example**
+
+```typescript
+const playlist: FuckingPlaylist = {
+  id: "play-spotify-37i9dQZF1DXcBWIGoYBM5M",
+  track_cover_uri: "https://i.scdn.co/image/ab67616d0000b273...",
+  name: "Today's Top Hits",
+  artists: ["Various Artists"],
+  first_track: {
+    id: "track-spotify-6rqhFgbbKwnb9MLmUQDhG6",
+    name: "First Song",
+    artists: ["Artist Name"],
+    time_ms: 180000,
+    audio: { type: "spotify", id: "6rqhFgbbKwnb9MLmUQDhG6" }
+  },
+  totalDurationMs: 7200000,
+  source: "spotify"
+}
+```
+
+### FuckingTrack
+
+Represents a single music track with audio source and metadata.
+
+```typescript
+interface FuckingTrack {
+  id: TrackId
+  time_ms: number
+  name: string
+  artists: string[]
+  tags?: string[]
+  audio: AudioSource
+  next_tracks?: Record<PlaylistId, TrackId>
+}
+```
+
+<ResponseField name="id" type="TrackId" required>
+  Unique track identifier with source prefix
+</ResponseField>
+
+<ResponseField name="time_ms" type="number" required>
+  Track duration in milliseconds
+</ResponseField>
+
+<ResponseField name="name" type="string" required>
+  Track title
+</ResponseField>
+
+<ResponseField name="artists" type="string[]" required>
+  Array of artist names
+</ResponseField>
+
+<ResponseField name="tags" type="string[]">
+  Optional tags for categorization (e.g., genres, moods)
+</ResponseField>
+
+<ResponseField name="audio" type="AudioSource" required>
+  Audio source configuration (see AudioSource type)
+</ResponseField>
+
+<ResponseField name="next_tracks" type="Record<PlaylistId, TrackId>">
+  Maps playlist IDs to the next track ID in that playlist. Used for playlist-specific track ordering.
+</ResponseField>
+
+**Example**
+
+```typescript
+const track: FuckingTrack = {
+  id: "track-spotify-6rqhFgbbKwnb9MLmUQDhG6",
+  time_ms: 240000,
+  name: "Song Title",
+  artists: ["Artist Name", "Featured Artist"],
+  tags: ["rock", "indie", "2024"],
+  audio: { type: "spotify", id: "6rqhFgbbKwnb9MLmUQDhG6" },
+  next_tracks: {
+    "play-spotify-playlist1": "track-spotify-next-track-id",
+    "play-spotify-playlist2": "track-spotify-different-next-id"
+  }
+}
+```
+
+### AudioSource
+
+Discriminated union type for different audio streaming sources.
+
+```typescript
+type AudioSource =
+  | { type: "stream"; url: string }
+  | { type: "youtube"; id: string }
+  | { type: "spotify"; id: string }
+```
+
+**Stream source (direct URL)**
+
+```typescript
+{ type: "stream", url: "https://example.com/audio.mp3" }
+```
+
+**YouTube source**
+
+```typescript
+{ type: "youtube", id: "dQw4w9WgXcQ" }
+```
+
+**Spotify source**
+
+```typescript
+{ type: "spotify", id: "6rqhFgbbKwnb9MLmUQDhG6" }
+```
+
+### PlayerState
+
+Represents the current playback state stored in the database.
+
+```typescript
+interface PlayerState {
+  activePlaylist: PlaylistId
+  activeTrack: TrackId
+  trackTimestamp: number
+  lastPlaylistId: PlaylistId
+}
+```
+
+<ResponseField name="activePlaylist" type="PlaylistId" required>
+  The playlist currently being played from
+</ResponseField>
+
+<ResponseField name="activeTrack" type="TrackId" required>
+  The track currently playing
+</ResponseField>
+
+<ResponseField name="trackTimestamp" type="number" required>
+  Current playback position in milliseconds
+</ResponseField>
+
+<ResponseField name="lastPlaylistId" type="PlaylistId" required>
+  The last playlist loaded (used for resuming playback after reload)
+</ResponseField>
+
+**Example**
+
+```typescript
+const state: PlayerState = {
+  activePlaylist: "play-spotify-37i9dQZF1DXcBWIGoYBM5M",
+  activeTrack: "track-spotify-6rqhFgbbKwnb9MLmUQDhG6",
+  trackTimestamp: 45000, // 45 seconds in
+  lastPlaylistId: "play-spotify-37i9dQZF1DXcBWIGoYBM5M"
+}
+```
+
+## Extended types
+
+### FuckingPlaylistWithTracks
+
+Extends `FuckingPlaylist` with a full tracks array. Useful for serialization and API responses.
+
+```typescript
+interface FuckingPlaylistWithTracks extends FuckingPlaylist {
+  tracks: FuckingTrack[]
+}
+```
+
+**Example**
+
+```typescript
+const playlistWithTracks: FuckingPlaylistWithTracks = {
+  id: "play-spotify-37i9dQZF1DXcBWIGoYBM5M",
+  track_cover_uri: "https://i.scdn.co/image/cover.jpg",
+  name: "My Playlist",
+  artists: ["Various"],
+  first_track: firstTrack,
+  totalDurationMs: 7200000,
+  source: "spotify",
+  tracks: [
+    firstTrack,
+    secondTrack,
+    thirdTrack
+  ]
+}
+```
+
+## Bandcamp types
+
+Bandcamp-specific types for parsing album data from embedded page data.
+
+### BandcampTrackInfo
+
+```typescript
+interface BandcampTrackInfo {
+  track_num: number
+  title: string
+  title_link: string
+  duration: number
+  artist: string | null
+  file?: { "mp3-128"?: string }
+  track_id?: number
+}
+```
+
+### BandcampPageData
+
+```typescript
+interface BandcampPageData {
+  artist: string
+  trackinfo: BandcampTrackInfo[]
+  url: string
+  current?: {
+    title: string
+    release_date?: string
+    selling_band_id?: number
+  }
+  album_release_date?: string
+  albumArt: string
+  keywords?: string[]
+}
+```
+
+## Type guards
+
+You can create type guards for discriminating audio sources:
+
+```typescript
+function isSpotifySource(audio: AudioSource): audio is { type: "spotify"; id: string } {
+  return audio.type === "spotify"
+}
+
+function isYouTubeSource(audio: AudioSource): audio is { type: "youtube"; id: string } {
+  return audio.type === "youtube"
+}
+
+function isStreamSource(audio: AudioSource): audio is { type: "stream"; url: string } {
+  return audio.type === "stream"
+}
+
+// Usage
+if (isSpotifySource(track.audio)) {
+  console.log(`Spotify track ID: ${track.audio.id}`)
+}
+```
+
+## Import paths
+
+All types are exported from the shared types module:
+
+```typescript
+import type {
+  PlaylistId,
+  TrackId,
+  PlaylistSource,
+  FuckingPlaylist,
+  FuckingTrack,
+  AudioSource,
+  PlayerState,
+  FuckingPlaylistWithTracks,
+  BandcampTrackInfo,
+  BandcampPageData
+} from "@/shared/types"
+```

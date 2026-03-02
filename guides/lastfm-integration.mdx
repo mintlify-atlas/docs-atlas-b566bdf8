@@ -1,0 +1,441 @@
+---
+title: Setting up Last.fm integration
+description: Connect your Last.fm account to import your complete scrobble history for building your music graph
+---
+
+Last.fm integration provides access to your complete listening history (scrobbles), making it the richest data source for building your music graph in Rotations.
+
+## Overview
+
+Last.fm integration enables:
+
+- **Full scrobble history** - Import all your scrobbles, not just recent tracks
+- **Timestamp accuracy** - Exact play times for graph edge creation
+- **Resume support** - Pause and resume large imports with checkpoints
+- **Long-term listening patterns** - Years of data for comprehensive analysis
+- **Album artwork** - Images for tracks in your graph visualization
+
+## Prerequisites
+
+Before setting up Last.fm integration:
+
+- A Last.fm account with scrobbling enabled
+- Active scrobbling from your music apps (Spotify, Apple Music, etc.)
+- A Last.fm API key (free, instant approval)
+
+<Info>
+  Last.fm provides a free API with generous rate limits. Unlike Spotify, it doesn't require OAuth and works with any music source that scrobbles to Last.fm.
+</Info>
+
+## Getting a Last.fm API key
+
+<Steps>
+  <Step title="Go to Last.fm API page">
+    Visit [https://www.last.fm/api/account/create](https://www.last.fm/api/account/create) and log in with your Last.fm account.
+  </Step>
+
+  <Step title="Fill in the application form">
+    Complete the API account creation form:
+
+    - **Application name**: "Rotations" (or your preferred name)
+    - **Application description**: "Personal music listening graph analysis"
+    - **Callback URL**: Leave blank (not needed for Rotations)
+    - **Application homepage**: `https://github.com/yourusername/rotations` (optional)
+
+    Accept the terms of service and click **Submit**.
+  </Step>
+
+  <Step title="Get your API key">
+    After submission, you'll immediately see your API credentials:
+
+    - **API Key** - A 32-character alphanumeric string
+    - **Shared secret** - Not needed for Rotations (read-only operations)
+
+    Copy the API Key for the next step.
+  </Step>
+</Steps>
+
+<Tip>
+  Last.fm API keys are approved instantly. You can start importing scrobbles immediately after getting your key.
+</Tip>
+
+## Configuring credentials
+
+Add your Last.fm credentials to your environment:
+
+<Steps>
+  <Step title="Open your .env file">
+    If you don't have one, create it:
+
+    ```bash
+    cd rotations
+    touch .env
+    ```
+  </Step>
+
+  <Step title="Add Last.fm configuration">
+    Add these lines to `.env`:
+
+    ```bash .env
+    # Last.fm API credentials
+    LASTFM_API_KEY=your_api_key_here
+    LASTFM_USERNAME=your_lastfm_username
+    ```
+
+    Replace:
+    - `your_api_key_here` with your actual API key
+    - `your_lastfm_username` with your Last.fm username
+  </Step>
+
+  <Step title="Verify configuration">
+    Test your credentials:
+
+    ```bash
+    cd graph-pipeline
+    npm run config -- --check-lastfm
+    ```
+
+    This validates:
+    - API key is set
+    - Username is set
+    - API key is valid
+    - Username exists
+  </Step>
+</Steps>
+
+## Fetching scrobbles
+
+Import your complete scrobble history:
+
+<Steps>
+  <Step title="Start the fetch">
+    Run the Last.fm fetcher:
+
+    ```bash
+    cd graph-pipeline
+    npm run fetch-lastfm
+    ```
+
+    This begins paginating through your scrobble history.
+  </Step>
+
+  <Step title="Monitor progress">
+    The fetcher displays progress:
+
+    ```
+    Found 45,234 scrobbles across 227 pages
+    Page 1/227 — 200 tracks
+    Page 2/227 — 400 tracks
+    Page 3/227 — 600 tracks
+    ...
+    ```
+
+    Progress updates show:
+    - Current page number
+    - Total pages
+    - Cumulative track count
+  </Step>
+
+  <Step title="Wait for completion">
+    The fetcher runs until all pages are retrieved:
+
+    ```
+    Page 227/227 — 45,234 tracks total
+    Done! 45,234 scrobbles saved to data/lastfm-scrobbles.json
+    ```
+
+    Large histories may take 5-15 minutes due to rate limiting.
+  </Step>
+</Steps>
+
+### Understanding the fetch process
+
+The fetcher:
+
+1. **Makes initial request** to get total scrobble count and page count
+2. **Paginates through all pages** at 200 scrobbles per page
+3. **Applies rate limiting** (1 request per second by default)
+4. **Saves checkpoints** every 10 pages for resume support
+5. **Parses and validates** scrobbles, skipping invalid entries
+6. **Deduplicates** based on `artist::track::timestamp`
+7. **Saves final output** to `data/lastfm-scrobbles.json`
+
+<Accordion title="Rate limiting details">
+  Last.fm's API allows 5 requests per second, but Rotations defaults to 1 request per second to be conservative:
+
+  ```typescript
+  const RATE_LIMIT_MS = 1000 // 1 request per second
+
+  await sleep(RATE_LIMIT_MS)
+  const response = await client.request('user.getRecentTracks', { ... })
+  ```
+
+  You can adjust this in `graph-pipeline/src/ingestion/lastfm-fetcher.ts`:
+
+  ```typescript
+  const RATE_LIMIT_MS = 200 // 5 requests per second (max)
+  ```
+</Accordion>
+
+## Resume support
+
+Large scrobble histories can take time to fetch. Rotations includes checkpoint-based resume:
+
+### How checkpoints work
+
+1. **Checkpoint creation**: Every 10 pages, a checkpoint is saved to `data/lastfm-checkpoint.json`
+2. **Checkpoint contents**: Last timestamp, scrobble count, fetch date
+3. **Resume behavior**: Next fetch resumes from the last checkpoint
+
+### Resuming an interrupted fetch
+
+If a fetch is interrupted (network error, CTRL+C, etc.):
+
+```bash
+# Simply run the fetch again
+npm run fetch-lastfm
+
+# Output shows resume:
+Resuming from checkpoint: 10,000 scrobbles already fetched,
+picking up from 2024-11-15T10:30:00Z
+```
+
+The fetcher:
+- Loads existing scrobbles from `data/lastfm-scrobbles.json`
+- Reads the checkpoint timestamp
+- Fetches only scrobbles after that timestamp
+- Merges with existing data
+- Deduplicates the combined result
+
+### Force a full refresh
+
+Ignore checkpoints and re-fetch everything:
+
+```bash
+npm run fetch-lastfm -- --full-refresh
+```
+
+This:
+- Deletes existing checkpoint
+- Fetches from the beginning
+- Overwrites `data/lastfm-scrobbles.json`
+
+<Warning>
+  Full refresh fetches your entire history again. For large histories (50k+ scrobbles), this can take 15+ minutes.
+</Warning>
+
+## Data format
+
+Scrobbles are saved as JSON arrays:
+
+```json
+[
+  {
+    "artist": "Radiohead",
+    "track": "Paranoid Android",
+    "album": "OK Computer",
+    "timestamp": 1700000000,
+    "imageUrl": "https://lastfm.freetls.fastly.net/i/u/300x300/abc123.jpg"
+  },
+  ...
+]
+```
+
+Each scrobble includes:
+
+```typescript
+interface RawScrobble {
+  artist: string // Artist name
+  track: string // Track name
+  album: string // Album name (may be empty)
+  timestamp: number // Unix timestamp (seconds)
+  imageUrl?: string // Album artwork from Last.fm
+}
+```
+
+### Scrobble validation
+
+The fetcher skips invalid scrobbles:
+
+- **Now playing** entries (no timestamp yet)
+- Tracks with empty artist or track name
+- Tracks with timestamp of 0
+- Duplicate `artist::track::timestamp` combinations
+
+<Accordion title="Example: Invalid scrobbles">
+  These are skipped during import:
+
+  ```json
+  // Now playing (no timestamp)
+  {
+    "artist": "Radiohead",
+    "track": "Karma Police",
+    "@attr": { "nowplaying": "true" }
+  }
+
+  // Missing essential fields
+  {
+    "artist": "",
+    "track": "Unknown Track",
+    "timestamp": 1700000000
+  }
+
+  // Duplicate
+  {
+    "artist": "Radiohead",
+    "track": "Paranoid Android",
+    "timestamp": 1700000000
+  }
+  // (same artist::track::timestamp as previous scrobble)
+  ```
+</Accordion>
+
+## Incremental updates
+
+Update your scrobble history without re-fetching everything:
+
+```bash
+# Fetch only new scrobbles since last import
+npm run fetch-lastfm -- --incremental
+```
+
+This:
+1. Reads the latest timestamp from `data/lastfm-scrobbles.json`
+2. Fetches only scrobbles after that timestamp
+3. Appends new scrobbles to the existing file
+4. Re-sorts by timestamp
+
+<Tip>
+  Run incremental updates regularly (daily or weekly) to keep your graph up to date without refetching your entire history.
+</Tip>
+
+## Integration with graph building
+
+Once scrobbles are fetched, they're used in graph construction:
+
+### Edge creation from scrobbles
+
+Scrobbles create directed edges based on sequential plays:
+
+```typescript
+// Sort chronologically
+const sorted = scrobbles.sort((a, b) => a.timestamp - b.timestamp)
+
+// Connect consecutive tracks within 1 hour
+for (let i = 0; i < sorted.length - 1; i++) {
+  const timeDiff = sorted[i + 1].timestamp - sorted[i].timestamp
+  if (timeDiff <= 3600) { // 1 hour in seconds
+    addEdge(sorted[i], sorted[i + 1])
+  }
+}
+```
+
+The 1-hour threshold prevents connecting tracks across different listening sessions.
+
+### Node metadata from scrobbles
+
+Each scrobble contributes to node attributes:
+
+```typescript
+interface GraphNode {
+  name: string // Track name
+  artists: string[] // Artist names
+  albumName?: string // Album name from scrobbles
+  totalPlays: number // Count of scrobbles for this song
+  sources: ['lastfm'] // Data source
+  playDates: string[] // ISO timestamps of each scrobble
+  imageUrl?: string // First non-empty image URL found
+}
+```
+
+## Troubleshooting
+
+<Accordion title="API key validation fails">
+  1. Verify your API key is correct in `.env`
+  2. Check for extra spaces or newlines around the key
+  3. Ensure your Last.fm account is active
+  4. Try generating a new API key
+  5. Test the key manually: `curl "http://ws.audioscrobbler.com/2.0/?method=user.getInfo&user=YOUR_USERNAME&api_key=YOUR_KEY&format=json"`
+</Accordion>
+
+<Accordion title="No scrobbles found">
+  1. Check that your Last.fm username is correct
+  2. Verify you have scrobbles on your Last.fm profile
+  3. Ensure scrobbling is enabled in your music apps
+  4. Try fetching a different user's scrobbles to test: `LASTFM_USERNAME=another_user npm run fetch-lastfm`
+</Accordion>
+
+<Accordion title="Fetch is very slow">
+  1. This is expected for large histories (rate limiting)
+  2. 50,000 scrobbles at 1 req/sec = ~4 minutes
+  3. Increase rate limit at your own risk (may hit API limits)
+  4. Use resume support to pause and continue later
+</Accordion>
+
+<Accordion title="Checkpoint not resuming">
+  1. Verify `data/lastfm-checkpoint.json` exists
+  2. Check that the file contains valid JSON
+  3. Ensure `data/lastfm-scrobbles.json` hasn't been deleted
+  4. Try running with `--full-refresh` to start fresh
+</Accordion>
+
+## Advanced configuration
+
+### Custom rate limiting
+
+Adjust rate limiting in the code:
+
+```typescript
+// graph-pipeline/src/ingestion/lastfm-fetcher.ts
+const RATE_LIMIT_MS = 500 // 2 requests per second
+```
+
+<Warning>
+  Last.fm's API limit is 5 requests per second. Exceeding this may result in temporary API blocks.
+</Warning>
+
+### Custom page size
+
+```typescript
+// Maximum allowed by Last.fm
+const TRACKS_PER_PAGE = 200
+```
+
+### Checkpoint frequency
+
+```typescript
+// Save checkpoint every N pages
+if (page % 10 === 0) {
+  await saveCheckpoint()
+}
+```
+
+Change `10` to a different value for more/less frequent checkpoints.
+
+### Data directory
+
+```typescript
+// graph-pipeline/src/ingestion/lastfm-fetcher.ts
+const DATA_DIR = path.join(import.meta.dirname, '../../data')
+```
+
+Change to save scrobbles to a different location.
+
+## Best practices
+
+1. **Regular updates**: Run `--incremental` daily or weekly
+2. **Monitor checkpoints**: Keep checkpoints for large histories
+3. **Validate data**: Check `data/lastfm-scrobbles.json` after large fetches
+4. **Respect rate limits**: Don't increase beyond 5 req/sec
+5. **Backup data**: Copy scrobble files before major operations
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Adding music" icon="music" href="/guides/adding-music">
+    Combine Last.fm with other data sources
+  </Card>
+  <Card title="Managing rotations" icon="list" href="/guides/managing-rotations">
+    Create rotations from your scrobble history
+  </Card>
+</CardGroup>

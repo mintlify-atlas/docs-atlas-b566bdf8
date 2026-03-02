@@ -1,0 +1,385 @@
+---
+title: Import sources
+description: Multi-source music ingestion from Bandcamp, Spotify, YouTube, and more
+---
+
+Rotations supports importing music from multiple streaming platforms. Each source has its own scraping API that extracts track metadata and audio streams.
+
+## Supported sources
+
+<CardGroup cols={2}>
+  <Card title="Bandcamp" icon="circle-check">
+    Full album and track imports with high-quality MP3 streams
+  </Card>
+  <Card title="Spotify" icon="circle-check">
+    Albums, playlists, and tracks (30-second previews or full playback with OAuth)
+  </Card>
+  <Card title="YouTube" icon="circle-check">
+    Videos and playlists with audio extraction via yt-dlp
+  </Card>
+  <Card title="SoundCloud" icon="circle-dot">
+    Coming soon
+  </Card>
+</CardGroup>
+
+## Bandcamp imports
+
+Bandcamp scraping extracts embedded track data from album and track pages.
+
+### How it works
+
+<Steps>
+  <Step title="Scrape page HTML">
+    The scraper fetches the Bandcamp page and extracts the `data-tralbum` attribute containing track info.
+
+    ```typescript
+    // From site/src/pages/api/bandcamp/scrape.ts:10-32
+    function extractBandcampData(html: string, fallbackUrl: string) {
+        const tralbumMatch = html.match(/data-tralbum="([^"]*)"/)
+        if (!tralbumMatch) {
+            return { success: false, message: "Could not extract track data" }
+        }
+
+        const tralbumDataStr = tralbumMatch[1]
+            .replace(/&quot;/g, '"')
+            .replace(/&amp;/g, "&")
+            .replace(/&lt;/g, "<")
+            .replace(/&gt;/g, ">")
+            .replace(/&#39;/g, "'")
+
+        let tralbumData: Record<string, any>
+        try {
+            tralbumData = JSON.parse(tralbumDataStr)
+        } catch (e) {
+            return { success: false, message: "Failed to parse tralbum data" }
+        }
+        // ...
+    }
+    ```
+  </Step>
+  
+  <Step title="Extract album art">
+    Album artwork is extracted from either the popup image link or OpenGraph meta tags.
+
+    ```typescript
+    // From site/src/pages/api/bandcamp/scrape.ts:46-55
+    let albumArt: string | null = null
+    const artMatch = html.match(/<a[^>]*class="popupImage"[^>]*href="([^"]*)"/)  
+    if (artMatch) {
+        albumArt = artMatch[1]
+    } else {
+        const ogImageMatch = html.match(/<meta[^>]*property="og:image"[^>]*content="([^"]*)"/)
+        if (ogImageMatch) {
+            albumArt = ogImageMatch[1]
+        }
+    }
+    ```
+  </Step>
+  
+  <Step title="Transform to playlist">
+    Track data is transformed into the internal playlist format with MP3-128 streams.
+
+    ```typescript
+    // From site/src/pages/api/bandcamp/scrape.ts:93-111
+    const tracks: FuckingTrack[] = pageData.trackinfo
+        .filter((t) => t.file?.["mp3-128"])
+        .map((trackInfo, index) => {
+            const trackId: TrackId = `track-${trackInfo.track_id || index + 1}`
+
+            let streamUrl = trackInfo.file?.["mp3-128"]
+            if (streamUrl && !streamUrl.startsWith("http")) {
+                streamUrl = "https:" + streamUrl
+            }
+
+            return {
+                id: trackId,
+                time_ms: Math.round((trackInfo.duration || 0) * 1000),
+                name: trackInfo.title,
+                artists: [trackInfo.artist || artist],
+                tags: keywords.length > 0 ? keywords : undefined,
+                audio: { type: "stream" as const, url: streamUrl ?? "" },
+            }
+        })
+    ```
+  </Step>
+</Steps>
+
+### Example API usage
+
+```bash
+curl "http://localhost:4321/api/bandcamp/scrape?url=https://artist.bandcamp.com/album/album-name"
+```
+
+<Tabs>
+  <Tab title="Response">
+    ```json
+    {
+      "playlist": {
+        "id": "play-artist-album-album-name",
+        "track_cover_uri": "https://f4.bcbits.com/img/a1234567890_10.jpg",
+        "name": "Album Name",
+        "artists": ["Artist Name"],
+        "first_track": { /* track object */ },
+        "totalDurationMs": 2847000,
+        "source": "bandcamp"
+      },
+      "tracks": [ /* array of track objects */ ]
+    }
+    ```
+  </Tab>
+  
+  <Tab title="Track format">
+    ```typescript
+    {
+      id: "track-1234567",
+      time_ms: 234000,
+      name: "Track Title",
+      artists: ["Artist Name"],
+      tags: ["electronic", "ambient"],
+      audio: { 
+        type: "stream", 
+        url: "https://t4.bcbits.com/stream/abc123/mp3-128/1234567" 
+      },
+      next_tracks: {
+        "play-artist-album": "track-1234568"
+      }
+    }
+    ```
+  </Tab>
+</Tabs>
+
+## Spotify imports
+
+Spotify scraping extracts data from embed pages without requiring API credentials for previews.
+
+### Extract from embed page
+
+<Steps>
+  <Step title="Fetch embed HTML">
+    ```typescript
+    // From site/src/pages/api/spotify/scrape.ts:38-46
+    const embedUrl = `https://open.spotify.com/embed/${urlType}/${urlId}`
+    const response = await fetch(embedUrl, {
+        headers: {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.5",
+        },
+    })
+    ```
+  </Step>
+  
+  <Step title="Parse Next.js data">
+    ```typescript
+    // From site/src/pages/api/spotify/scrape.ts:54-73
+    const nextDataMatch = html.match(
+        /<script id="__NEXT_DATA__" type="application\/json">([^<]+)<\/script>/
+    )
+    if (!nextDataMatch) {
+        return new Response(JSON.stringify({ error: "Could not find Spotify embed data" }), {
+            status: 500,
+            headers: { "Content-Type": "application/json" },
+        })
+    }
+
+    let nextData: any
+    try {
+        nextData = JSON.parse(nextDataMatch[1])
+    } catch {
+        return new Response(JSON.stringify({ error: "Failed to parse Spotify embed data" }), {
+            status: 500,
+            headers: { "Content-Type": "application/json" },
+        })
+    }
+    ```
+  </Step>
+  
+  <Step title="Extract track previews">
+    ```typescript
+    // From site/src/pages/api/spotify/scrape.ts:92-105
+    const tracks: FuckingTrack[] = []
+    const trackList = entity.trackList || []
+
+    for (const item of trackList) {
+        if (!item.audioPreview?.url) continue
+
+        tracks.push({
+            id: `track-${item.uri?.split(":").pop() || tracks.length}` as TrackId,
+            time_ms: item.duration || 0,
+            name: item.title || "Unknown Track",
+            artists: [item.subtitle || artistNames[0] || "Unknown Artist"],
+            audio: { type: "stream", url: item.audioPreview.url },
+        })
+    }
+    ```
+  </Step>
+</Steps>
+
+<Warning>
+Spotify embed scraping only provides 30-second preview clips. For full playback, use the Spotify Web Playback SDK with OAuth authentication.
+</Warning>
+
+## YouTube imports
+
+YouTube scraping uses `yt-dlp` to extract video metadata and stream audio.
+
+### yt-dlp integration
+
+<Steps>
+  <Step title="Execute yt-dlp">
+    ```typescript
+    // From site/src/pages/api/youtube/scrape.ts:36-42
+    const isPlaylist = youtubeUrl.includes("list=")
+    const cmd = isPlaylist
+        ? `yt-dlp -j --flat-playlist --no-warnings "${youtubeUrl}"`
+        : `yt-dlp -j --no-warnings "${youtubeUrl}"`
+
+    const { stdout } = await execAsync(cmd, { maxBuffer: 10 * 1024 * 1024 })
+    ```
+  </Step>
+  
+  <Step title="Parse JSON output">
+    ```typescript
+    // From site/src/pages/api/youtube/scrape.ts:50-74
+    if (isPlaylist) {
+        const lines = stdout.trim().split("\n").filter((line) => line.trim())
+        const videos: YtDlpVideoInfo[] = lines.map((line) => JSON.parse(line))
+
+        if (videos.length === 0) {
+            return new Response(JSON.stringify({ error: "No videos found" }), {
+                status: 500,
+                headers: { "Content-Type": "application/json" },
+            })
+        }
+
+        const playlistIdMatch = youtubeUrl.match(/list=([a-zA-Z0-9_-]+)/)
+        id = playlistIdMatch ? playlistIdMatch[1] : "unknown"
+        title = videos[0]?.playlist_title || "YouTube Playlist"
+        channel = videos[0]?.channel || videos[0]?.uploader || "Unknown"
+        thumbnail = `https://img.youtube.com/vi/${videos[0]?.id}/maxresdefault.jpg`
+        videoTracks = videos.map((video) => ({
+            id: video.id,
+            title: video.title,
+            duration: video.duration || 0,
+            channel: video.channel || video.uploader || "Unknown",
+        }))
+    }
+    ```
+  </Step>
+  
+  <Step title="Create playlist">
+    ```typescript
+    // From site/src/pages/api/youtube/scrape.ts:94-114
+    const tracks: FuckingTrack[] = videoTracks.map((track) => ({
+        id: `track-yt-${track.id}` as TrackId,
+        time_ms: Math.round(track.duration * 1000),
+        name: track.title,
+        artists: [track.channel],
+        audio: { type: "youtube" as const, id: track.id },
+    }))
+
+    for (let i = 0; i < tracks.length - 1; i++) {
+        tracks[i].next_tracks = { [playlistId]: tracks[i + 1].id }
+    }
+
+    const playlist: FuckingPlaylist = {
+        id: playlistId,
+        track_cover_uri: thumbnail,
+        name: title,
+        artists: [channel],
+        first_track: tracks[0],
+        totalDurationMs: tracks.reduce((acc, t) => acc + t.time_ms, 0),
+        source: "youtube",
+    }
+    ```
+  </Step>
+</Steps>
+
+<Tip>
+YouTube audio is streamed on-demand through `/api/youtube/stream?id={videoId}` rather than cached, since YouTube URLs expire.
+</Tip>
+
+## Import workflow
+
+The typical import flow in the UI:
+
+```typescript
+// User pastes URL into import dialog
+const url = "https://artist.bandcamp.com/album/name"
+
+// Frontend calls appropriate scrape endpoint
+const response = await fetch(`/api/bandcamp/scrape?url=${encodeURIComponent(url)}`)
+const { playlist, tracks } = await response.json()
+
+// Add to local database
+addPlaylists([playlist])
+addTracks(tracks, playlist.id)
+
+// Shuffle associations to connect with existing playlists
+shuffleAssociations()
+```
+
+## Audio source types
+
+Each platform uses a different audio source type:
+
+<Tabs>
+  <Tab title="Stream (Bandcamp)">
+    ```typescript
+    {
+      type: "stream",
+      url: "https://t4.bcbits.com/stream/abc123/mp3-128/1234567"
+    }
+    ```
+    Direct MP3 stream URL that can be cached.
+  </Tab>
+  
+  <Tab title="YouTube">
+    ```typescript
+    {
+      type: "youtube",
+      id: "dQw4w9WgXcQ"
+    }
+    ```
+    Video ID for on-demand streaming through the proxy.
+  </Tab>
+  
+  <Tab title="Spotify">
+    ```typescript
+    {
+      type: "spotify",
+      uri: "spotify:track:4cOdK2wGLETKBW3PvgPWqT"
+    }
+    ```
+    Spotify URI for playback through the Web Playback SDK.
+  </Tab>
+</Tabs>
+
+## Error handling
+
+All scrape endpoints return structured errors:
+
+```typescript
+{
+  error: "Failed to scrape Bandcamp page",
+  details: "Could not extract track data from Bandcamp page"
+}
+```
+
+Common errors include:
+
+- Invalid or private URLs
+- Region-restricted content
+- Malformed HTML that breaks parsing
+- Missing audio streams (Spotify tracks without previews)
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Offline mode" icon="wifi-off" href="/features/offline-mode">
+    Learn how imported tracks are cached for offline playback
+  </Card>
+  <Card title="Listening graph" icon="chart-network" href="/features/listening-graph">
+    Analyze your listening history with the graph pipeline
+  </Card>
+</CardGroup>

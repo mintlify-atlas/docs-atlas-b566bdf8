@@ -1,0 +1,158 @@
+---
+title: Rotations
+description: Hand-crafted music rotation system that dynamically connects your playlists
+---
+
+Rotations is a music player built around a unique concept: instead of endlessly scrolling through your library, you create focused **rotations** of music that evolve as you listen.
+
+## How rotations work
+
+When you add music to Rotations, every track automatically becomes part of your **current rotation**. As you listen, the system builds connections between tracks and playlists, creating a personalized music graph.
+
+<Info>
+Rotations is import-only. You add music once, and it's stored forever in your browser's local database.
+</Info>
+
+### Track associations
+
+Every track in your library maintains connections to other tracks across different playlists. These connections are called **next tracks** and determine what you can jump to after the current song finishes.
+
+<Steps>
+  <Step title="Import your music">
+    Add playlists from Bandcamp, Spotify, YouTube, or SoundCloud. Each playlist becomes part of your library.
+  </Step>
+  
+  <Step title="Associations are generated">
+    The system automatically creates cross-playlist connections. Each track gets 2 random next tracks from other playlists.
+  </Step>
+  
+  <Step title="Listen and explore">
+    As you play music, you'll see side tracks that let you jump between playlists seamlessly.
+  </Step>
+</Steps>
+
+## Side tracks
+
+While listening to any track, you'll see **side tracks** positioned on the left and right of the album artwork. These are your next track options from different playlists.
+
+```typescript
+// From site/src/lib/associations.ts:36-53
+const nextTracks: Record<PlaylistId, TrackId> = {}
+
+if (otherPlaylistIds.length >= 2) {
+    // Pick 2 unique random playlists
+    for (const playlistId of shuffleArray(otherPlaylistIds).slice(0, 2)) {
+        const tracks = tracksByPlaylist.get(playlistId)
+        if (tracks && tracks.length > 0) {
+            nextTracks[playlistId] = pickRandom(tracks).id
+        }
+    }
+}
+```
+
+This creates a non-linear listening experience where you can branch between genres, artists, and albums based on your mood.
+
+## Multi-rotation mode
+
+You can maintain multiple distinct rotations simultaneously. Each rotation acts as an isolated music graph with its own associations.
+
+<CardGroup cols={2}>
+  <Card title="Focus rotation" icon="music">
+    Deep work music with minimal vocals and steady tempo
+  </Card>
+  <Card title="Discovery rotation" icon="compass">
+    New releases and experimental tracks you're exploring
+  </Card>
+  <Card title="Workout rotation" icon="dumbbell">
+    High-energy tracks with strong beats
+  </Card>
+  <Card title="Evening rotation" icon="moon">
+    Downtempo and ambient music for winding down
+  </Card>
+</CardGroup>
+
+## Persistent storage
+
+All your music and rotation data is stored locally in your browser using TinyBase and IndexedDB.
+
+```typescript
+// From site/src/lib/store.ts:13-40
+const store = createStore()
+    .setTablesSchema({
+        playlists: {
+            id: { type: "string" },
+            track_cover_uri: { type: "string" },
+            name: { type: "string" },
+            artists: { type: "string" },
+            first_track_id: { type: "string" },
+            source: { type: "string" },
+        },
+        tracks: {
+            id: { type: "string" },
+            playlist_id: { type: "string" },
+            time_ms: { type: "number" },
+            name: { type: "string" },
+            artists: { type: "string" },
+            tags: { type: "string" },
+            stream_url: { type: "string" },
+            next_tracks: { type: "string" },
+        },
+    })
+```
+
+<Note>
+Your rotation data never leaves your device. Everything is stored client-side in localStorage and IndexedDB.
+</Note>
+
+## Shuffling associations
+
+You can reshuffle your rotation at any time to generate new connections between tracks.
+
+```typescript
+// From site/src/lib/associations.ts:17-20
+export function shuffleAssociations(): void {
+    const playlists = db.getPlaylists()
+    if (playlists.length === 0) return
+
+    const allTracks: FuckingTrack[] = []
+    const tracksByPlaylist = new Map<PlaylistId, FuckingTrack[]>()
+    // ... generates new random associations
+}
+```
+
+This keeps your listening experience fresh without requiring manual playlist curation.
+
+## Player state persistence
+
+Rotations automatically saves your listening position every 5 seconds, so you can close the app and resume exactly where you left off.
+
+```typescript
+// From site/src/hooks/PlayerContext.tsx:261-275
+const savePlayerState = useCallback(() => {
+    const trackId = tracks[currentTrackIndex]?.id
+    if (trackId) {
+        db.setPlayerState({ 
+            activeTrack: trackId, 
+            trackTimestamp: currentTimeMs 
+        })
+    }
+}, [tracks, currentTrackIndex, currentTimeMs])
+
+useEffect(() => {
+    if (!currentTrack) return
+    const interval = setInterval(savePlayerState, 5000)
+    savePlayerState()
+    return () => clearInterval(interval)
+}, [currentTrackIndex, savePlayerState, currentTrack])
+```
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Import sources" icon="download" href="/features/import-sources">
+    Learn how to import music from Bandcamp, Spotify, YouTube, and SoundCloud
+  </Card>
+  <Card title="Offline mode" icon="wifi-off" href="/features/offline-mode">
+    Understand how automatic caching works for offline playback
+  </Card>
+</CardGroup>

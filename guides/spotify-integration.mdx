@@ -1,0 +1,482 @@
+---
+title: Setting up Spotify integration
+description: Connect your Spotify account to import listening history and export rotations as playlists
+---
+
+Spotify integration enables you to import your listening history from Spotify and export your Rotations back to Spotify as playlists.
+
+## Overview
+
+The Spotify integration provides:
+
+- **Recently played tracks** - Import your last 50 played tracks
+- **Playlist import** - Import all your playlists with track ordering
+- **Playlist export** - Export rotations back to Spotify
+- **Playback control** - Play songs directly from the graph visualization
+- **OAuth authentication** - Secure, token-based access to your account
+
+## Prerequisites
+
+Before setting up Spotify integration, you need:
+
+- A Spotify account (Free or Premium)
+- A Spotify Developer account (free to create)
+- Node.js installed for running the CLI tools
+
+<Warning>
+  Some features (like playback control) require Spotify Premium. Import and export features work with Free accounts.
+</Warning>
+
+## Creating a Spotify app
+
+<Steps>
+  <Step title="Go to Spotify Developer Dashboard">
+    Visit [https://developer.spotify.com/dashboard](https://developer.spotify.com/dashboard) and log in with your Spotify account.
+  </Step>
+
+  <Step title="Create a new app">
+    Click **"Create app"** and fill in the required information:
+
+    - **App name**: "Rotations" (or your preferred name)
+    - **App description**: "Personal music listening graph"
+    - **Redirect URI**: `http://localhost:8888/callback`
+    - **Which API/SDKs are you planning to use**: Select "Web API"
+
+    Accept the terms of service and click **Create**.
+  </Step>
+
+  <Step title="Get your credentials">
+    After creating the app, you'll see your app settings page. Click **Settings** to reveal:
+
+    - **Client ID** - A long alphanumeric string
+    - **Client Secret** - Click "View client secret" to reveal it
+
+    Copy both values for the next step.
+  </Step>
+
+  <Step title="Configure redirect URI">
+    Ensure `http://localhost:8888/callback` is listed under "Redirect URIs" in your app settings.
+
+    If you need to use a different port, you can add additional redirect URIs:
+    - `http://localhost:3000/callback`
+    - `http://localhost:5173/callback`
+
+    Click **Save** after making changes.
+  </Step>
+</Steps>
+
+<Info>
+  Keep your Client Secret secure. Never commit it to version control or share it publicly.
+</Info>
+
+## Configuring credentials
+
+Add your Spotify credentials to your environment configuration:
+
+<Steps>
+  <Step title="Create .env file">
+    If you don't already have one, create a `.env` file in your project root:
+
+    ```bash
+    cd rotations
+    touch .env
+    ```
+  </Step>
+
+  <Step title="Add Spotify credentials">
+    Open `.env` and add your credentials:
+
+    ```bash .env
+    # Spotify API credentials
+    SPOTIFY_CLIENT_ID=your_client_id_here
+    SPOTIFY_CLIENT_SECRET=your_client_secret_here
+
+    # OAuth callback port (default: 8888)
+    SPOTIFY_REDIRECT_PORT=8888
+    ```
+
+    Replace `your_client_id_here` and `your_client_secret_here` with your actual credentials from the Developer Dashboard.
+  </Step>
+
+  <Step title="Verify configuration">
+    Test that your credentials are loaded correctly:
+
+    ```bash
+    cd graph-pipeline
+    npm run config -- --check-spotify
+    ```
+
+    This validates that the required environment variables are set.
+  </Step>
+</Steps>
+
+## Running the OAuth flow
+
+Spotify uses OAuth 2.0 for authentication. This requires user authorization through a browser.
+
+<Steps>
+  <Step title="Start the authorization flow">
+    Run the authorization command:
+
+    ```bash
+    cd graph-pipeline
+    npm run auth-spotify
+    ```
+
+    This will:
+    1. Start a local HTTP server on port 8888
+    2. Generate an authorization URL
+    3. Attempt to open your default browser
+  </Step>
+
+  <Step title="Authorize the app">
+    If the browser doesn't open automatically, copy the displayed URL and open it manually.
+
+    You'll see a Spotify authorization page showing:
+    - The scopes your app is requesting
+    - Your app name and description
+    - Options to approve or deny
+
+    Click **Agree** to authorize.
+  </Step>
+
+  <Step title="Complete authorization">
+    After approving, Spotify redirects to `http://localhost:8888/callback`.
+
+    The local server:
+    1. Captures the authorization code
+    2. Exchanges it for access and refresh tokens
+    3. Saves tokens to `.spotify-tokens.json`
+    4. Displays a success message
+
+    You can close the browser tab.
+  </Step>
+</Steps>
+
+### Understanding scopes
+
+The authorization requests these scopes:
+
+```typescript
+const REQUIRED_SCOPES = [
+  'user-read-recently-played',  // Import recently played tracks
+  'playlist-read-private',       // Access private playlists
+  'playlist-read-collaborative', // Access collaborative playlists
+]
+```
+
+<Accordion title="What each scope allows">
+  - **user-read-recently-played**: Read your last 50 played tracks with timestamps
+  - **playlist-read-private**: Access private playlists for import
+  - **playlist-read-collaborative**: Access collaborative playlists you're part of
+
+  Additional scopes for export features:
+  - **playlist-modify-public**: Create/modify public playlists (rotation export)
+  - **playlist-modify-private**: Create/modify private playlists (rotation export)
+</Accordion>
+
+### Token storage
+
+Tokens are saved to `.spotify-tokens.json`:
+
+```json
+{
+  "access_token": "BQD...",
+  "refresh_token": "AQB...",
+  "expires_at": 1735689600000,
+  "scope": "user-read-recently-played playlist-read-private playlist-read-collaborative"
+}
+```
+
+<Warning>
+  **Important security notes:**
+  - Add `.spotify-tokens.json` to `.gitignore`
+  - Never commit tokens to version control
+  - Tokens grant access to your Spotify account
+  - The refresh token is valid indefinitely until revoked
+</Warning>
+
+## Token management
+
+### Automatic token refresh
+
+The integration automatically refreshes expired access tokens:
+
+```typescript
+// Access tokens expire after 1 hour
+if (Date.now() >= tokens.expires_at - 60_000) {
+  await auth.refreshAccessToken()
+}
+```
+
+Refresh happens:
+- Before any API request if the token expires in < 60 seconds
+- Automatically when receiving 401 (Unauthorized) responses
+- Using the stored refresh token
+
+### Manual token refresh
+
+Force a token refresh:
+
+```bash
+cd graph-pipeline
+npm run refresh-spotify-token
+```
+
+### Revoking access
+
+To revoke Rotations' access to your Spotify account:
+
+<Steps>
+  <Step title="Remove from Spotify">
+    1. Go to [https://www.spotify.com/account/apps/](https://www.spotify.com/account/apps/)
+    2. Find "Rotations" in the list
+    3. Click **Remove Access**
+  </Step>
+
+  <Step title="Delete local tokens">
+    Remove the stored tokens:
+
+    ```bash
+    rm .spotify-tokens.json
+    ```
+  </Step>
+
+  <Step title="Re-authorize (optional)">
+    To re-connect, run the auth flow again:
+
+    ```bash
+    npm run auth-spotify
+    ```
+  </Step>
+</Steps>
+
+## Importing data
+
+Once authorized, import your Spotify data:
+
+### Recently played tracks
+
+```bash
+cd graph-pipeline
+npm run fetch-spotify
+```
+
+This fetches:
+- Your last 50 recently played tracks
+- Play timestamps (ISO 8601 format)
+- Track metadata (artist, title, album)
+- Album artwork URLs
+- Spotify track IDs
+
+Data is saved to `data/spotify-recent.json`.
+
+<Info>
+  Spotify's API only provides the last 50 tracks. For complete history, use Last.fm integration which provides unlimited scrobble history.
+</Info>
+
+### All playlists
+
+The fetch command also imports all your playlists:
+
+```bash
+# Already included in fetch-spotify
+npm run fetch-spotify
+```
+
+For each playlist, this fetches:
+- Playlist name and ID
+- All tracks with their position in the playlist
+- Track metadata and artwork
+- Both public and private playlists
+- Collaborative playlists you have access to
+
+Data is saved to `data/spotify-playlists.json`.
+
+### Incremental updates
+
+Update your data without re-fetching everything:
+
+```bash
+# Fetch only new recently played tracks
+npm run fetch-spotify -- --incremental
+
+# Fetch only playlists (skip recently played)
+npm run fetch-spotify -- --playlists-only
+
+# Fetch only recently played (skip playlists)
+npm run fetch-spotify -- --recent-only
+```
+
+## Exporting rotations
+
+Export your rotations back to Spotify as playlists:
+
+<Steps>
+  <Step title="Ensure export scopes are authorized">
+    If you haven't already, re-authorize with export permissions:
+
+    ```bash
+    npm run auth-spotify -- --scopes "user-read-recently-played,playlist-read-private,playlist-read-collaborative,playlist-modify-public,playlist-modify-private"
+    ```
+  </Step>
+
+  <Step title="Export a rotation">
+    Export a rotation by name:
+
+    ```bash
+    npm run export-rotation -- \
+      --name "My Rotation" \
+      --to spotify \
+      --playlist-name "Rotations: My Rotation"
+    ```
+
+    This creates a new Spotify playlist with the rotation's songs.
+  </Step>
+
+  <Step title="Update existing playlist">
+    Update an existing playlist instead of creating a new one:
+
+    ```bash
+    npm run export-rotation -- \
+      --name "My Rotation" \
+      --to spotify \
+      --playlist-id "37i9dQZF1DXcBWIGoYBM5M" \
+      --replace
+    ```
+
+    Use `--replace` to clear existing tracks, or omit it to append.
+  </Step>
+</Steps>
+
+### Export options
+
+```bash
+# Create public playlist
+--public
+
+# Create private playlist (default)
+--private
+
+# Add description
+--description "Auto-generated from Rotations"
+
+# Skip tracks without Spotify IDs
+--skip-missing
+
+# Order by graph connectivity (default: original rotation order)
+--order-by-graph
+```
+
+<Accordion title="Handling tracks without Spotify IDs">
+  Some tracks in your rotation may not have Spotify IDs (e.g., if they only came from Last.fm).
+
+  Options:
+  1. **Skip missing** (`--skip-missing`): Export only tracks with Spotify IDs
+  2. **Search and match** (`--search-missing`): Attempt to find tracks on Spotify by artist and title
+  3. **Fail on missing** (default): Abort if any tracks are missing IDs
+
+  ```bash
+  # Search for missing tracks
+  npm run export-rotation -- \
+    --name "My Rotation" \
+    --to spotify \
+    --search-missing
+  ```
+</Accordion>
+
+## Rate limiting
+
+Spotify APIs have rate limits. The integration handles this automatically:
+
+```typescript
+// Automatic retry on 429 (Rate Limited) responses
+if (response.status === 429) {
+  const retryAfter = parseInt(
+    response.headers.get('Retry-After') ?? '5',
+    10
+  )
+  await sleep(retryAfter * 1000)
+  // Retry request
+}
+```
+
+### Best practices
+
+- **Pagination**: Requests are paginated (50-100 items per page)
+- **Retry logic**: 429 responses trigger automatic retry after the specified delay
+- **Max retries**: Failed requests retry up to 3 times before giving up
+- **Concurrent requests**: Avoid making multiple requests simultaneously
+
+<Tip>
+  If you hit rate limits frequently, add delays between operations or reduce batch sizes.
+</Tip>
+
+## Troubleshooting
+
+<Accordion title="Authorization fails with 'invalid redirect URI'">
+  1. Verify the redirect URI in your Spotify app settings matches exactly: `http://localhost:8888/callback`
+  2. Check that the port in `.env` matches: `SPOTIFY_REDIRECT_PORT=8888`
+  3. Ensure no other service is using port 8888
+  4. Try changing to a different port (update both `.env` and Spotify app settings)
+</Accordion>
+
+<Accordion title="Token refresh fails">
+  1. Check that `.spotify-tokens.json` exists and is valid JSON
+  2. Verify your Client Secret is correct in `.env`
+  3. Ensure you haven't revoked access in your Spotify account settings
+  4. Delete `.spotify-tokens.json` and re-run the auth flow
+</Accordion>
+
+<Accordion title="Recently played tracks are empty">
+  1. Verify you have played songs on Spotify recently (within the last few weeks)
+  2. Check that the `user-read-recently-played` scope was authorized
+  3. Try playing a few songs on Spotify, then re-run the fetch
+  4. Check the API response in debug mode: `DEBUG=* npm run fetch-spotify`
+</Accordion>
+
+<Accordion title="Export creates empty playlist">
+  1. Ensure the rotation exists: `npm run list-rotations`
+  2. Check that songs in the rotation have Spotify IDs: `npm run show-rotation -- --name "My Rotation" --check-ids`
+  3. Use `--search-missing` to find missing tracks on Spotify
+  4. Verify export scopes are authorized: `playlist-modify-public` and/or `playlist-modify-private`
+</Accordion>
+
+## Advanced configuration
+
+### Custom OAuth port
+
+Change the OAuth callback port:
+
+```bash .env
+SPOTIFY_REDIRECT_PORT=3000
+```
+
+Update your Spotify app settings to include `http://localhost:3000/callback`.
+
+### Token file location
+
+Change where tokens are stored:
+
+```bash .env
+SPOTIFY_TOKEN_PATH=/path/to/custom-tokens.json
+```
+
+### API request timeout
+
+Adjust the timeout for API requests:
+
+```bash .env
+SPOTIFY_API_TIMEOUT=30000 # 30 seconds
+```
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Adding music" icon="music" href="/guides/adding-music">
+    Learn about all music import sources
+  </Card>
+  <Card title="Last.fm integration" icon="lastfm" href="/guides/lastfm-integration">
+    Add Last.fm for complete listening history
+  </Card>
+</CardGroup>

@@ -1,0 +1,321 @@
+---
+title: Database store
+description: TinyBase database API for managing playlists and tracks in local storage
+---
+
+The `Database` class provides a persistent storage layer for Rotations using [TinyBase](https://tinybase.org/) with browser localStorage. It manages playlists, tracks, and player state with automatic persistence.
+
+## Initialization
+
+### init()
+
+Initializes the database and sets up localStorage persistence. Must be called before using any other methods.
+
+```typescript
+async init(): Promise<void>
+```
+
+**Example**
+
+```typescript
+import { db } from "@/lib/store"
+
+await db.init()
+```
+
+<Note>
+This method is safe to call multiple times - it will only initialize once. It includes an SSR guard and will no-op on the server.
+</Note>
+
+## Player state
+
+### getPlayerState()
+
+Retrieves the current player state from the store.
+
+```typescript
+getPlayerState(): PlayerState | undefined
+```
+
+<ResponseField name="activePlaylist" type="PlaylistId">
+  The currently active playlist ID
+</ResponseField>
+
+<ResponseField name="activeTrack" type="TrackId">
+  The currently playing track ID
+</ResponseField>
+
+<ResponseField name="trackTimestamp" type="number">
+  Current playback position in milliseconds
+</ResponseField>
+
+<ResponseField name="lastPlaylistId" type="PlaylistId">
+  The last playlist that was loaded (used for resuming playback)
+</ResponseField>
+
+**Example**
+
+```typescript
+const state = db.getPlayerState()
+if (state) {
+  console.log(`Currently playing ${state.activeTrack} at ${state.trackTimestamp}ms`)
+}
+```
+
+### setPlayerState()
+
+Updates the player state. Accepts partial updates - only provided fields are modified.
+
+```typescript
+setPlayerState(state: Partial<PlayerState>): void
+```
+
+<ParamField path="state" type="Partial<PlayerState>" required>
+  Partial player state object with fields to update
+</ParamField>
+
+**Example**
+
+```typescript
+// Update only the timestamp
+db.setPlayerState({ trackTimestamp: 45000 })
+
+// Update track and reset timestamp
+db.setPlayerState({
+  activeTrack: "track-spotify-abc123",
+  trackTimestamp: 0
+})
+```
+
+## Track operations
+
+### getTrack()
+
+Retrieves a single track by ID.
+
+```typescript
+getTrack(trackId: TrackId): FuckingTrack | null
+```
+
+<ParamField path="trackId" type="TrackId" required>
+  The track ID to retrieve (format: `track-{source}-{id}`)
+</ParamField>
+
+**Returns:** The track object or `null` if not found
+
+**Example**
+
+```typescript
+const track = db.getTrack("track-spotify-6rqhFgbbKwnb9MLmUQDhG6")
+if (track) {
+  console.log(`${track.name} by ${track.artists.join(", ")}`)
+}
+```
+
+### getTracks()
+
+Retrieves all tracks for a given playlist.
+
+```typescript
+getTracks(playlistId: PlaylistId): FuckingTrack[]
+```
+
+<ParamField path="playlistId" type="PlaylistId" required>
+  The playlist ID to get tracks for
+</ParamField>
+
+**Returns:** Array of tracks belonging to the playlist
+
+**Example**
+
+```typescript
+const tracks = db.getTracks("play-spotify-37i9dQZF1DXcBWIGoYBM5M")
+console.log(`Found ${tracks.length} tracks`)
+```
+
+### getAllTracks()
+
+Retrieves all tracks from all playlists in the database.
+
+```typescript
+getAllTracks(): FuckingTrack[]
+```
+
+**Returns:** Array of all tracks
+
+### insertTracks()
+
+Inserts multiple tracks into the database for a specific playlist.
+
+```typescript
+insertTracks(tracks: FuckingTrack[], playlistId: PlaylistId): void
+```
+
+<ParamField path="tracks" type="FuckingTrack[]" required>
+  Array of track objects to insert
+</ParamField>
+
+<ParamField path="playlistId" type="PlaylistId" required>
+  The playlist these tracks belong to
+</ParamField>
+
+**Example**
+
+```typescript
+const tracks: FuckingTrack[] = [
+  {
+    id: "track-spotify-123",
+    name: "Song Title",
+    artists: ["Artist Name"],
+    time_ms: 240000,
+    audio: { type: "spotify", id: "123" },
+    tags: ["rock", "indie"]
+  }
+]
+
+db.insertTracks(tracks, "play-spotify-playlist123")
+```
+
+### updateTrack()
+
+Updates an existing track in the database.
+
+```typescript
+updateTrack(track: FuckingTrack): void
+```
+
+<ParamField path="track" type="FuckingTrack" required>
+  The updated track object (must have an existing ID)
+</ParamField>
+
+**Example**
+
+```typescript
+const track = db.getTrack("track-spotify-123")
+if (track) {
+  track.tags = [...track.tags, "favorite"]
+  db.updateTrack(track)
+}
+```
+
+## Playlist operations
+
+### getPlaylist()
+
+Retrieves a single playlist by ID. Automatically calculates total duration from all tracks.
+
+```typescript
+getPlaylist(playlistId: PlaylistId): FuckingPlaylist | null
+```
+
+<ParamField path="playlistId" type="PlaylistId" required>
+  The playlist ID to retrieve (format: `play-{source}-{id}`)
+</ParamField>
+
+**Returns:** The playlist object or `null` if not found
+
+**Example**
+
+```typescript
+const playlist = db.getPlaylist("play-spotify-37i9dQZF1DXcBWIGoYBM5M")
+if (playlist) {
+  console.log(`${playlist.name} has ${playlist.totalDurationMs}ms of music`)
+}
+```
+
+### getPlaylists()
+
+Retrieves all playlists from the database.
+
+```typescript
+getPlaylists(): FuckingPlaylist[]
+```
+
+**Returns:** Array of all playlists
+
+**Example**
+
+```typescript
+const playlists = db.getPlaylists()
+for (const playlist of playlists) {
+  console.log(`${playlist.name} - ${playlist.artists.join(", ")}`)
+}
+```
+
+### insertPlaylist()
+
+Inserts a playlist into the database and sets it as the last playlist ID.
+
+```typescript
+insertPlaylist(playlist: FuckingPlaylist): void
+```
+
+<ParamField path="playlist" type="FuckingPlaylist" required>
+  The playlist object to insert
+</ParamField>
+
+<Warning>
+Ensure the playlist's `first_track` exists in the database before calling this method.
+</Warning>
+
+**Example**
+
+```typescript
+const playlist: FuckingPlaylist = {
+  id: "play-spotify-123",
+  name: "Chill Vibes",
+  artists: ["Various Artists"],
+  track_cover_uri: "https://example.com/cover.jpg",
+  first_track: firstTrackObject,
+  totalDurationMs: 3600000,
+  source: "spotify"
+}
+
+db.insertPlaylist(playlist)
+```
+
+## Schema
+
+The database uses two tables with automatic localStorage persistence:
+
+### Playlists table
+
+```typescript
+{
+  id: string              // PlaylistId
+  track_cover_uri: string // Cover image URL
+  name: string           // Playlist name
+  artists: string        // JSON stringified array
+  first_track_id: string // TrackId of first track
+  source: string         // "spotify" | "youtube" | "bandcamp"
+}
+```
+
+### Tracks table
+
+```typescript
+{
+  id: string          // TrackId
+  playlist_id: string // PlaylistId this track belongs to
+  time_ms: number     // Duration in milliseconds
+  name: string        // Track name
+  artists: string     // JSON stringified array
+  tags: string        // JSON stringified array
+  stream_url: string  // JSON stringified AudioSource
+  next_tracks: string // JSON stringified Record<PlaylistId, TrackId>
+}
+```
+
+## Singleton instance
+
+The database is exported as a singleton instance:
+
+```typescript
+import { db } from "@/lib/store"
+
+// Initialize once in your app
+await db.init()
+
+// Use throughout your application
+const playlists = db.getPlaylists()
+```
