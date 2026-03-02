@@ -1,0 +1,102 @@
+{
+  "projectType": "saas",
+  "projectName": "Rotations",
+  "projectDescription": "A music streaming platform that rebuilds Spotify from first principles with hand-curated rotation control and listening graph analytics.",
+  "theme": "almond",
+  "primaryColor": "#8B5CF6",
+  "lightColor": "#A78BFA",
+  "darkColor": "#6D28D9",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "quickstart",
+              "installation"
+            ]
+          },
+          {
+            "group": "Core Features",
+            "pages": [
+              "features/rotations",
+              "features/offline-mode",
+              "features/import-sources",
+              "features/listening-graph"
+            ]
+          },
+          {
+            "group": "Guides",
+            "pages": [
+              "guides/adding-music",
+              "guides/managing-rotations",
+              "guides/graph-visualization",
+              "guides/spotify-integration",
+              "guides/lastfm-integration"
+            ]
+          },
+          {
+            "group": "Architecture",
+            "pages": [
+              "architecture/overview",
+              "architecture/music-player",
+              "architecture/graph-pipeline",
+              "architecture/data-model"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "Graph Pipeline",
+            "pages": [
+              "api/graph-pipeline/overview",
+              "api/graph-pipeline/ingestion",
+              "api/graph-pipeline/analysis",
+              "api/graph-pipeline/types"
+            ]
+          },
+          {
+            "group": "Music Library",
+            "pages": [
+              "api/music-library/store",
+              "api/music-library/player",
+              "api/music-library/types"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Import-only music player with automatic offline caching",
+    "Rotation-based playlist system with configurable radius",
+    "Multi-source music ingestion (Bandcamp, Spotify, YouTube, Soundcloud)",
+    "Listening history graph with PageRank analysis",
+    "Interactive graph visualization of listening patterns",
+    "Spotify and Last.fm integration",
+    "Local-first data storage with automatic persistence"
+  ],
+  "publicApiSurface": [
+    "Database.init()",
+    "Database.getPlayerState()",
+    "Database.setPlayerState()",
+    "Database.getTrack()",
+    "Database.getPlaylist()",
+    "Database.insertPlaylist()",
+    "Database.insertTracks()",
+    "toSongKey()",
+    "computePageRank()",
+    "getTopByPageRank()",
+    "loadLastfmConfig()",
+    "loadSpotifyConfig()",
+    "ListeningGraph",
+    "GraphNode",
+    "SongKey"
+  ]
+}
